@@ -10,7 +10,7 @@ const KNOWN_DISPLAY_NAMES = [
   "עדן", "נועה", "שחר", "מאיה", "רון", "דניאל", "יובל", "עמית",
 ];
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "forgot";
 
 export default function LoginPage() {
   return (
@@ -110,6 +110,26 @@ function LoginPageInner() {
     }
   }
 
+  // ── Forgot password ──────────────────────────────────────────────────────────
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    reset();
+    if (!email) { setError("יש להזין אימייל"); return; }
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { error: authError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/api/auth/callback?next=/reset-password`,
+      });
+      if (authError) { setError(authError.message); return; }
+      setInfo("נשלח אימייל לאיפוס סיסמה — בדוק את תיבת הדואר שלך.");
+    } catch {
+      setError("שגיאה בשליחה — נסה שוב");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div dir="rtl" className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center px-4 py-12">
@@ -125,29 +145,31 @@ function LoginPageInner() {
           </div>
           <h1 className="text-2xl font-bold text-gray-800">מערכת סידור עבודה</h1>
           <p className="text-gray-500 text-sm mt-1">
-            {mode === "login" ? "כניסה למערכת" : "הרשמה למערכת"}
+            {mode === "login" ? "כניסה למערכת" : mode === "register" ? "הרשמה למערכת" : "איפוס סיסמה"}
           </p>
         </div>
 
         <div className="bg-white rounded-2xl shadow-md p-8 space-y-5">
 
-          {/* Mode toggle */}
-          <div className="flex rounded-xl overflow-hidden border border-gray-200">
-            {(["login", "register"] as Mode[]).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => { setMode(m); reset(); }}
-                className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
-                  mode === m
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-gray-500 hover:bg-gray-50"
-                }`}
-              >
-                {m === "login" ? "כניסה" : "הרשמה"}
-              </button>
-            ))}
-          </div>
+          {/* Mode toggle — only shown for login / register */}
+          {mode !== "forgot" && (
+            <div className="flex rounded-xl overflow-hidden border border-gray-200">
+              {(["login", "register"] as ("login" | "register")[]).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => { setMode(m); reset(); }}
+                  className={`flex-1 py-2.5 text-sm font-semibold transition-colors ${
+                    mode === m
+                      ? "bg-blue-600 text-white"
+                      : "bg-white text-gray-500 hover:bg-gray-50"
+                  }`}
+                >
+                  {m === "login" ? "כניסה" : "הרשמה"}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Error / info banners */}
           {error && (
@@ -188,6 +210,42 @@ function LoginPageInner() {
 
               <button type="submit" disabled={loading} className={BTN_PRIMARY}>
                 {loading ? "מתחבר..." : "כניסה"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setMode("forgot"); reset(); setPassword(""); }}
+                className="w-full text-sm text-blue-600 hover:underline text-center mt-1"
+              >
+                שכחתי סיסמה
+              </button>
+            </form>
+          )}
+
+          {/* ── FORGOT PASSWORD FORM ─────────────────────────────────────────── */}
+          {mode === "forgot" && (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <Field label="אימייל">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="your@email.com"
+                  autoComplete="email"
+                  className={INPUT}
+                />
+              </Field>
+
+              <button type="submit" disabled={loading} className={BTN_PRIMARY}>
+                {loading ? "שולח..." : "שלח קישור לאיפוס"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setMode("login"); reset(); }}
+                className="w-full text-sm text-gray-500 hover:underline text-center"
+              >
+                חזרה לכניסה
               </button>
             </form>
           )}
