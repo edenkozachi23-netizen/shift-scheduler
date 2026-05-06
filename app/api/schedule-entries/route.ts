@@ -98,6 +98,7 @@ export async function POST(request: Request) {
       period:            e.period,
       employee_id:       e.employeeId,
       shift_template_id: e.shiftTemplateId,
+      week_start:        weekStart,
     }));
 
     const ins = await fetch(`${SUPABASE_URL}/rest/v1/saved_schedule_entries`, {
