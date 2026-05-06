@@ -266,6 +266,16 @@ export default function EmployeeDashboardPage() {
     .filter((c) => c.dateISO < today)
     .sort((a, b) => b.dateISO.localeCompare(a.dateISO)); // newest first
 
+  // ── Conflict detection: saved shifts that clash with submitted constraints ──
+  const conflictingShifts = shifts.filter((s) =>
+    constraints.some((c) => {
+      if (c.dateISO !== s.date) return false;
+      if (c.constraintType === "all-day") return true;
+      const constraintPeriod = c.constraintType.startsWith("morning") ? "morning" : "evening";
+      return constraintPeriod === s.period;
+    })
+  );
+
   // ── Submit ────────────────────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -373,6 +383,20 @@ export default function EmployeeDashboardPage() {
           </div>
 
           <div className="px-5 py-4">
+            {conflictingShifts.length > 0 && (
+              <div className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 space-y-1">
+                <p className="font-semibold">שים לב — ישנן משמרות שמורות שמתנגשות עם האילוצים שלך:</p>
+                {conflictingShifts.map((s, i) => {
+                  const [y, m, d] = s.date.split("-").map(Number);
+                  return (
+                    <p key={i} className="text-xs">
+                      • {s.dayName} {d}/{m}/{y} — {s.period === "morning" ? "בוקר" : "ערב"} ({s.timeRange})
+                    </p>
+                  );
+                })}
+                <p className="text-xs text-amber-700 mt-1">המנהל צריך לצור סידור חדש כדי שהאילוצים ייושמו.</p>
+              </div>
+            )}
             {shiftsLoading ? (
               <p className="text-sm text-gray-400">טוען...</p>
             ) : shiftsError ? (

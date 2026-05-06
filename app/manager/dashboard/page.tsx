@@ -835,6 +835,7 @@ export default function ManagerDashboardPage() {
   // ── Historical / aggregated stats ─────────────────────────────────────────
   const [generating, setGenerating]         = useState(false);
   const [generateError, setGenerateError]   = useState<string | null>(null);
+  const [constraintInfo, setConstraintInfo] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -873,6 +874,7 @@ export default function ManagerDashboardPage() {
 
     setGenerating(true);
     setGenerateError(null);
+    setConstraintInfo(null);
     try {
       const res = await fetch(
         `/api/employee-constraints?from=${startDate}&to=${endDate}`
@@ -891,6 +893,13 @@ export default function ManagerDashboardPage() {
         constraintType: r.constraint_type as ConstraintType,
         note:           r.note,
       }));
+
+      const uniqueEmployees = new Set(constraints.map((c) => c.employee)).size;
+      setConstraintInfo(
+        constraints.length === 0
+          ? `לא נמצאו אילוצים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
+          : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
+      );
 
       const result = generateSchedule(
         buildShiftSlots(startDate, endDate),
@@ -1178,6 +1187,11 @@ export default function ManagerDashboardPage() {
           {generateError && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               {generateError}
+            </div>
+          )}
+          {constraintInfo && !generateError && (
+            <div className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+              {constraintInfo}
             </div>
           )}
           <div className="flex flex-wrap gap-3">
