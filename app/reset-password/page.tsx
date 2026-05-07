@@ -15,19 +15,22 @@ export default function ResetPasswordPage() {
   const [formError, setFormError]   = useState<string | null>(null);
   const [done, setDone]             = useState(false);
 
-  // Exchange the one-time code that Supabase appended to the URL
+  // Exchange the one-time code that Supabase appended to the URL.
+  // The Supabase browser client may auto-exchange the code on init, making a
+  // second call fail with "code already used". So we fall back to checking
+  // whether a session was established anyway.
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get("code");
-    if (!code) {
-      setStage("error");
-      return;
-    }
-    createClient()
-      .auth.exchangeCodeForSession(code)
-      .then(({ error }) => {
-        if (error) setStage("error");
-        else setStage("ready");
+    if (!code) { setStage("error"); return; }
+
+    const supabase = createClient();
+    supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+      if (!error) { setStage("ready"); return; }
+      // Exchange failed — check if the client already established a session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setStage(session ? "ready" : "error");
       });
+    });
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
