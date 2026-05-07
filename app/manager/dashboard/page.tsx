@@ -836,6 +836,7 @@ export default function ManagerDashboardPage() {
   const [generating, setGenerating]         = useState(false);
   const [generateError, setGenerateError]   = useState<string | null>(null);
   const [constraintInfo, setConstraintInfo] = useState<string | null>(null);
+  const [missingConstraints, setMissingConstraints] = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -875,6 +876,7 @@ export default function ManagerDashboardPage() {
     setGenerating(true);
     setGenerateError(null);
     setConstraintInfo(null);
+    setMissingConstraints([]);
     try {
       const res = await fetch(
         `/api/employee-constraints?from=${startDate}&to=${endDate}`
@@ -894,7 +896,11 @@ export default function ManagerDashboardPage() {
         note:           r.note,
       }));
 
-      const uniqueEmployees = new Set(constraints.map((c) => c.employee)).size;
+      const employeesWithConstraints = new Set(constraints.map((c) => c.employee));
+      const noConstraints = EMPLOYEES.filter((e) => !employeesWithConstraints.has(e));
+      setMissingConstraints(noConstraints);
+
+      const uniqueEmployees = employeesWithConstraints.size;
       setConstraintInfo(
         constraints.length === 0
           ? `לא נמצאו אילוצים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
@@ -1192,6 +1198,12 @@ export default function ManagerDashboardPage() {
           {constraintInfo && !generateError && (
             <div className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
               {constraintInfo}
+            </div>
+          )}
+          {missingConstraints.length > 0 && !generateError && (
+            <div className="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3">
+              <p className="font-semibold mb-1">⚠️ לא הגישו אילוצים לשבוע הקרוב ({missingConstraints.length} עובדים):</p>
+              <p>{missingConstraints.join(" · ")}</p>
             </div>
           )}
           <div className="flex flex-wrap gap-3">
