@@ -42,6 +42,11 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
+  // ── Reset password — user arrives with a one-time code, not yet authenticated
+  if (pathname === "/reset-password") {
+    return supabaseResponse;
+  }
+
   // ── Other API routes — skip redirect, they return JSON ─────────────────────
   if (pathname.startsWith("/api/")) {
     return supabaseResponse;

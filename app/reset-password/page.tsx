@@ -1,35 +1,52 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function ResetPasswordPage() {
   const router = useRouter();
+
+  // "loading" = exchanging the code, "ready" = show form, "error" = bad/missing code
+  const [stage, setStage]           = useState<"loading" | "ready" | "error">("loading");
   const [password, setPassword]     = useState("");
   const [confirmPwd, setConfirmPwd] = useState("");
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
+  const [saving, setSaving]         = useState(false);
+  const [formError, setFormError]   = useState<string | null>(null);
   const [done, setDone]             = useState(false);
+
+  // Exchange the one-time code that Supabase appended to the URL
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("code");
+    if (!code) {
+      setStage("error");
+      return;
+    }
+    createClient()
+      .auth.exchangeCodeForSession(code)
+      .then(({ error }) => {
+        if (error) setStage("error");
+        else setStage("ready");
+      });
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
-    if (!password || !confirmPwd) { setError("יש למלא את שני השדות"); return; }
-    if (password !== confirmPwd)  { setError("הסיסמאות אינן תואמות"); return; }
-    if (password.length < 6)      { setError("הסיסמה חייבת להכיל לפחות 6 תווים"); return; }
+    setFormError(null);
+    if (!password || !confirmPwd) { setFormError("יש למלא את שני השדות"); return; }
+    if (password !== confirmPwd)  { setFormError("הסיסמאות אינן תואמות"); return; }
+    if (password.length < 6)      { setFormError("הסיסמה חייבת להכיל לפחות 6 תווים"); return; }
 
-    setLoading(true);
+    setSaving(true);
     try {
-      const supabase = createClient();
-      const { error: authError } = await supabase.auth.updateUser({ password });
-      if (authError) { setError(authError.message); return; }
+      const { error } = await createClient().auth.updateUser({ password });
+      if (error) { setFormError(error.message); return; }
       setDone(true);
       setTimeout(() => router.replace("/login"), 2500);
     } catch {
-      setError("שגיאה באיפוס הסיסמה — נסה שוב");
+      setFormError("שגיאה באיפוס הסיסמה — נסה שוב");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
@@ -45,22 +62,34 @@ export default function ResetPasswordPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-gray-800">איפוס סיסמה</h1>
-          <p className="text-gray-500 text-sm mt-1">הזן סיסמה חדשה לחשבון שלך</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-md p-8 space-y-5">
-          {done ? (
-            <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-center">
-              הסיסמה עודכנה בהצלחה! מועבר לדף הכניסה...
+        <div className="bg-white rounded-2xl shadow-md p-8">
+          {stage === "loading" && (
+            <p className="text-sm text-gray-500 text-center">מאמת קישור...</p>
+          )}
+
+          {stage === "error" && (
+            <div className="space-y-4">
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-center">
+                הקישור אינו תקף או פג תוקפו. יש לבקש קישור חדש.
+              </p>
+              <button
+                onClick={() => router.replace("/login")}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl py-2.5 text-sm transition-colors"
+              >
+                חזרה לכניסה
+              </button>
             </div>
-          ) : (
+          )}
+
+          {stage === "ready" && !done && (
             <form onSubmit={handleSubmit} className="space-y-4">
-              {error && (
+              {formError && (
                 <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                  {error}
+                  {formError}
                 </div>
               )}
-
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700">סיסמה חדשה</label>
                 <input
@@ -72,7 +101,6 @@ export default function ResetPasswordPage() {
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
-
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium text-gray-700">אימות סיסמה</label>
                 <input
@@ -84,15 +112,20 @@ export default function ResetPasswordPage() {
                   className="w-full border border-gray-300 rounded-xl px-3 py-2 text-gray-800 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
                 />
               </div>
-
               <button
                 type="submit"
-                disabled={loading}
+                disabled={saving}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold rounded-xl py-2.5 text-sm transition-colors"
               >
-                {loading ? "מעדכן..." : "עדכן סיסמה"}
+                {saving ? "מעדכן..." : "עדכן סיסמה"}
               </button>
             </form>
+          )}
+
+          {done && (
+            <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-xl px-4 py-3 text-center">
+              הסיסמה עודכנה בהצלחה! מועבר לדף הכניסה...
+            </div>
           )}
         </div>
       </div>
