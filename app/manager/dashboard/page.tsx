@@ -39,7 +39,6 @@ type Shift = [SlotValue, SlotValue];
 type DaySchedule = { morning: Shift; evening: Shift };
 type Schedule = DaySchedule[];
 
-const EMPLOYEES = [...ALL_EMPLOYEES];
 const DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -157,11 +156,12 @@ function analyzeShiftShortage(
   date: string,
   period: "morning" | "evening",
   entries: ScheduleEntry[],
-  constraints: Constraint[]
+  constraints: Constraint[],
+  employeeList: string[]
 ): ShortageReason {
   const shift = entries.find((e) => e.date === date && e.period === period);
   const assigned = new Set(shift?.assignments.map((a) => a.employeeId) ?? []);
-  const candidates = EMPLOYEES.filter((e) => !assigned.has(e));
+  const candidates = employeeList.filter((e) => !assigned.has(e));
   if (candidates.length === 0) return "available";
 
   const periodTemplates = SHIFT_TEMPLATES.filter((t) => t.period === period);
@@ -193,7 +193,8 @@ type MissingItem = {
 function getMissingList(
   schedule: Schedule,
   startDate: string,
-  entries: ScheduleEntry[]
+  entries: ScheduleEntry[],
+  employeeList: string[]
 ): MissingItem[] {
   const items: MissingItem[] = [];
   schedule.forEach((day, i) => {
@@ -202,14 +203,14 @@ function getMissingList(
     const mFilled = day.morning.filter(slotFilled).length;
     const eFilled = day.evening.filter(slotFilled).length;
     if (mFilled < 2) {
-      const raw = analyzeShiftShortage(date, "morning", entries, []);
+      const raw = analyzeShiftShortage(date, "morning", entries, [], employeeList);
       items.push({
         text:   `יום ${label} — בוקר — ${mFilled === 1 ? "חסר עובד 1" : "חסרים 2 עובדים"}`,
         reason: raw === "available" ? null : raw,
       });
     }
     if (eFilled < 2) {
-      const raw = analyzeShiftShortage(date, "evening", entries, []);
+      const raw = analyzeShiftShortage(date, "evening", entries, [], employeeList);
       items.push({
         text:   `יום ${label} — ערב — ${eFilled === 1 ? "חסר עובד 1" : "חסרים 2 עובדים"}`,
         reason: raw === "available" ? null : raw,
@@ -439,6 +440,7 @@ function buildPeriodStats(
   label: string,
   entries: ScheduleEntry[],
   groupBy: "week" | "month",
+  employeeList: string[]
 ): ExportPeriodStats {
   const LOAD_HE: Record<LoadLevel, "קל" | "תקין" | "עמוס"> = {
     low: "קל", medium: "תקין", high: "עמוס",
@@ -464,7 +466,7 @@ function buildPeriodStats(
     return MONTH_NAMES_HE[mo - 1];
   });
 
-  const allStats = computeEmployeeStats(entries, EMPLOYEES);
+  const allStats = computeEmployeeStats(entries, employeeList);
   const avgDivisor = groupBy === "week" ? sortedKeys.length : 13;
 
   const rows = allStats
@@ -494,15 +496,12 @@ type SlotProps = {
   period: "morning" | "evening";
   editMode: boolean;
   excludeEmployee?: string;
-  /**
-   * Short reason strings for every rule that flags this specific slot.
-   * Empty array (or undefined) means no violation.
-   */
+  employeeList: string[];
   violationReasons?: string[];
   onChange: (v: SlotValue) => void;
 };
 
-function SlotCell({ value, period, editMode, excludeEmployee, violationReasons, onChange }: SlotProps) {
+function SlotCell({ value, period, editMode, excludeEmployee, employeeList, violationReasons, onChange }: SlotProps) {
   const periodTemplates = SHIFT_TEMPLATES.filter((t) => t.period === period);
   const violating = (violationReasons?.length ?? 0) > 0;
 
@@ -525,7 +524,7 @@ function SlotCell({ value, period, editMode, excludeEmployee, violationReasons, 
           }`}
         >
           <option value="">— ריק —</option>
-          {EMPLOYEES.filter((emp) => emp !== excludeEmployee).map((emp) => (
+          {employeeList.filter((emp) => emp !== excludeEmployee).map((emp) => (
             <option key={emp} value={emp}>{emp}</option>
           ))}
         </select>
@@ -799,6 +798,9 @@ type Profile = {
 export default function ManagerDashboardPage() {
   const router = useRouter();
 
+  // ── Employees (loaded from DB) ────────────────────────────────────────────
+  const [employees, setEmployees] = useState<string[]>([...ALL_EMPLOYEES]);
+
   // ── Auth / profile ─────────────────────────────────────────────────────────
   const [profile, setProfile]           = useState<Profile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
@@ -813,6 +815,11 @@ export default function ManagerDashboardPage() {
           return;
         }
         setProfile(json);
+        // Load employees from DB (falls back to hardcoded list on error)
+        fetch("/api/employees")
+          .then((r) => r.ok ? r.json() : null)
+          .then((names: string[] | null) => { if (names && names.length > 0) setEmployees(names); })
+          .catch(() => undefined);
       })
       .catch(() => router.replace("/login"))
       .finally(() => setProfileLoading(false));
@@ -903,7 +910,7 @@ export default function ManagerDashboardPage() {
       }));
 
       const employeesWithConstraints = new Set(constraints.map((c) => c.employee));
-      const noConstraints = EMPLOYEES.filter((e) => !employeesWithConstraints.has(e));
+      const noConstraints = employees.filter((e) => !employeesWithConstraints.has(e));
       setMissingConstraints(noConstraints);
 
       const uniqueEmployees = employeesWithConstraints.size;
@@ -914,7 +921,7 @@ export default function ManagerDashboardPage() {
       );
 
       // Only auto-assign employees who submitted constraints — leave the rest for the manager
-      const eligibleEmployees = EMPLOYEES.filter((e) => employeesWithConstraints.has(e));
+      const eligibleEmployees = employees.filter((e) => employeesWithConstraints.has(e));
 
       const result = generateSchedule(
         buildShiftSlots(startDate, endDate),
@@ -1044,20 +1051,20 @@ export default function ManagerDashboardPage() {
 
   const stats    = schedule ? computeStats(schedule) : null;
   const missing  = schedule && scheduleStartDate && entries
-    ? getMissingList(schedule, scheduleStartDate, entries)
+    ? getMissingList(schedule, scheduleStartDate, entries, employees)
     : [];
   const coverage = entries ? validateShiftCoverage(entries) : null;
 
   const scheduleValidation = entries && scheduleStartDate
     ? validateSchedule(
         entries,
-        EMPLOYEES,
+        employees,
         scheduleStartDate,
         offsetDate(scheduleStartDate, 6)
       )
     : null;
 
-  const employeeStats   = entries ? computeEmployeeStats(entries, EMPLOYEES) : null;
+  const employeeStats   = entries ? computeEmployeeStats(entries, employees) : null;
   const employeeInsights = employeeStats ? computeInsights(employeeStats) : [];
   const softViolatingEmployees: Set<string> = scheduleValidation
     ? new Set(scheduleValidation.violations.filter((v) => v.severity === "soft").map((v) => v.employee))
@@ -1224,9 +1231,9 @@ export default function ManagerDashboardPage() {
       const qEntries = savedToEntries(qJson as SavedRow[]);
       const yEntries = savedToEntries(yJson as SavedRow[]);
 
-      setMonthlyData  (buildPeriodStats(month.label,   mEntries, "week"));
-      setQuarterlyData(buildPeriodStats(quarter.label, qEntries, "month"));
-      setYearlyData   (buildPeriodStats(year.label,    yEntries, "month"));
+      setMonthlyData  (buildPeriodStats(month.label,   mEntries, "week",  employees));
+      setQuarterlyData(buildPeriodStats(quarter.label, qEntries, "month", employees));
+      setYearlyData   (buildPeriodStats(year.label,    yEntries, "month", employees));
     } catch (err) {
       setHistError(err instanceof Error ? err.message : "שגיאה בטעינת נתונים היסטוריים");
     } finally {
@@ -1499,6 +1506,7 @@ export default function ManagerDashboardPage() {
                                 period={period}
                                 editMode={editMode}
                                 excludeEmployee={slots[1] !== "" ? slots[1].employee : undefined}
+                                employeeList={employees}
                                 violationReasons={getSlotViolations(date, period, slots[0])}
                                 onChange={(v) => updateSlot(di, period, 0, v)}
                               />
@@ -1507,6 +1515,7 @@ export default function ManagerDashboardPage() {
                                 period={period}
                                 editMode={editMode}
                                 excludeEmployee={slots[0] !== "" ? slots[0].employee : undefined}
+                                employeeList={employees}
                                 violationReasons={getSlotViolations(date, period, slots[1])}
                                 onChange={(v) => updateSlot(di, period, 1, v)}
                               />

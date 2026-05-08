@@ -4,12 +4,6 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
-// Display names that exist in the scheduling system.
-// Employees must choose one of these so their constraints and shifts match.
-const KNOWN_DISPLAY_NAMES = [
-  "עדן", "נועה", "שחר", "מאיה", "רון", "דניאל", "יובל", "עמית",
-];
-
 type Mode = "login" | "register" | "forgot";
 
 export default function LoginPage() {
@@ -266,18 +260,15 @@ function LoginPageInner() {
 
               <Field
                 label="שם בסידור"
-                hint="חייב להתאים לשם שלך ברשימת העובדים"
+                hint="השם שיופיע במשמרות שלך (לדוגמה: עדן, רון)"
               >
-                <select
+                <input
+                  type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="שם פרטי בעברית"
                   className={INPUT}
-                >
-                  <option value="">— בחר שם —</option>
-                  {KNOWN_DISPLAY_NAMES.map((n) => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
+                />
               </Field>
 
               <Field label="תפקיד">

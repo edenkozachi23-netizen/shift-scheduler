@@ -41,6 +41,19 @@ export async function POST(_request: Request) {
   const weekStart = getUpcomingWeekStart();
   const weekEnd   = offsetDate(weekStart, 6);
 
+  // 0. Fetch active employees from DB (fallback to hardcoded list)
+  let employeeList: string[] = [...EMPLOYEES];
+  try {
+    const eRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/users?role=eq.employee&is_active=eq.true&select=name&order=name.asc`,
+      { headers: dbHeaders(), cache: "no-store" }
+    );
+    if (eRes.ok) {
+      const rows = await eRes.json() as { name: string }[];
+      if (rows.length > 0) employeeList = rows.map((r) => r.name);
+    }
+  } catch { /* use fallback */ }
+
   // 1. Fetch constraints for the upcoming week
   const cRes = await fetch(
     `${SUPABASE_URL}/rest/v1/employee_constraints` +
@@ -62,7 +75,7 @@ export async function POST(_request: Request) {
   }));
 
   // 2. Generate schedule
-  const result = generateSchedule(buildShiftSlots(weekStart, weekEnd), EMPLOYEES, constraints);
+  const result = generateSchedule(buildShiftSlots(weekStart, weekEnd), employeeList, constraints);
 
   // 3. Replace saved entries for this week
   const del = await fetch(
