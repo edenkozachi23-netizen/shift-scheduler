@@ -801,6 +801,36 @@ export default function ManagerDashboardPage() {
   // ── Employees (loaded from DB) ────────────────────────────────────────────
   const [employees, setEmployees] = useState<string[]>([]);
 
+  // ── Tab navigation ────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<"schedule" | "employees" | "shifts">("schedule");
+
+  // ── Employee management ───────────────────────────────────────────────────
+  type ManagedUser = { id: string; name: string; role: string; is_active: boolean };
+  const [managedUsers, setManagedUsers]   = useState<ManagedUser[]>([]);
+  const [managedLoading, setManagedLoading] = useState(false);
+  const [managedError, setManagedError]   = useState<string | null>(null);
+  const [togglingUser, setTogglingUser]   = useState<string | null>(null);
+
+  // ── Publish schedule ──────────────────────────────────────────────────────
+  const [publishing, setPublishing]       = useState(false);
+  const [publishResult, setPublishResult] = useState<string | null>(null);
+
+  // ── Shift-type management ─────────────────────────────────────────────────
+  type ShiftTypeRow = { id: number; name: string; period: string; start_time: string; end_time: string };
+  const [shiftTypeRows,        setShiftTypeRows]        = useState<ShiftTypeRow[]>([]);
+  const [shiftTypesTabLoading, setShiftTypesTabLoading] = useState(false);
+  const [shiftTypesTabError,   setShiftTypesTabError]   = useState<string | null>(null);
+  const [editingShiftType,     setEditingShiftType]     = useState<ShiftTypeRow | null>(null);
+  const [newShiftType,         setNewShiftType]         = useState<Omit<ShiftTypeRow, "id">>({ name: "", period: "morning", start_time: "", end_time: "" });
+  const [addingShiftType,      setAddingShiftType]      = useState(false);
+  const [shiftTypesSaving,     setShiftTypesSaving]     = useState(false);
+
+  // ── Upcoming-week constraints overview ────────────────────────────────────
+  type WeekConstraintRow = { id: string; employee_id: string; date_iso: string; constraint_type: string; note: string };
+  const [weekConstraints,        setWeekConstraints]        = useState<WeekConstraintRow[]>([]);
+  const [weekConstraintsLoading, setWeekConstraintsLoading] = useState(false);
+  const [weekConstraintsError,   setWeekConstraintsError]   = useState<string | null>(null);
+
   // ── Auth / profile ─────────────────────────────────────────────────────────
   const [profile, setProfile]           = useState<Profile | null>(null);
   const [profileLoading, setProfileLoading] = useState(true);
@@ -853,6 +883,7 @@ export default function ManagerDashboardPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [isDirty, setIsDirty] = useState(false);
   const [monthlyData,   setMonthlyData]   = useState<ExportPeriodStats | null>(null);
   const [quarterlyData, setQuarterlyData] = useState<ExportPeriodStats | null>(null);
   const [yearlyData,    setYearlyData]    = useState<ExportPeriodStats | null>(null);
@@ -930,6 +961,7 @@ export default function ManagerDashboardPage() {
       setSchedule(engineToUISchedule(result.schedule, startDate));
       setScheduleStartDate(startDate);
       setEditMode(true);
+      setIsDirty(false);
       const totalSlots = 14; // 7 days × 2 periods × 2 employees = 28, but we count shifts (14 shift-slots of 2 each)
       const filledSlots = result.schedule.reduce((sum, e) => sum + e.assignments.length, 0);
       const emptySlots = 28 - filledSlots;
@@ -949,6 +981,7 @@ export default function ManagerDashboardPage() {
   }
 
   async function handleLoadSaved() {
+    if (isDirty && !window.confirm("יש שינויים לא שמורים בסידור הנוכחי. לטעון בכל זאת?")) return;
     setLoadingSaved(true);
     setLoadSavedError(null);
     try {
@@ -975,6 +1008,7 @@ export default function ManagerDashboardPage() {
       setScheduleStartDate(weekStart);
       setEditMode(false);
       setGenerateSummary(null);
+      setIsDirty(false);
     } finally {
       setLoadingSaved(false);
     }
@@ -1041,7 +1075,10 @@ export default function ManagerDashboardPage() {
         return { ...day, [period]: shift };
       })
     );
+    setIsDirty(true);
   }
+
+  const upcomingWeekStart = getUpcomingWeekStart();
 
   // ── Derived values — recalculated on every schedule state change ───────────
   const entries = schedule && scheduleStartDate
@@ -1194,6 +1231,7 @@ export default function ManagerDashboardPage() {
       });
       const json = await res.json();
       if (!res.ok) { setSaveError(json.error ?? `HTTP ${res.status}`); return; }
+      setIsDirty(false);
       setLastSaved(new Date().toLocaleTimeString("he-IL"));
       await loadHistoricalStats();
     } catch (err) {
@@ -1255,6 +1293,195 @@ export default function ManagerDashboardPage() {
     );
   }
 
+  async function loadManagedUsers() {
+    setManagedLoading(true);
+    setManagedError(null);
+    try {
+      const res = await fetch("/api/manage-employees");
+      const json = await res.json();
+      if (!res.ok) { setManagedError(json.error ?? `HTTP ${res.status}`); return; }
+      setManagedUsers(json as ManagedUser[]);
+    } catch (err) {
+      setManagedError(err instanceof Error ? err.message : "שגיאה");
+    } finally {
+      setManagedLoading(false);
+    }
+  }
+
+  async function handleToggleActive(userId: string, currentActive: boolean) {
+    setTogglingUser(userId);
+    try {
+      const res = await fetch("/api/manage-employees", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: userId, is_active: !currentActive }),
+      });
+      if (res.ok) {
+        setManagedUsers((prev) =>
+          prev.map((u) => u.id === userId ? { ...u, is_active: !currentActive } : u)
+        );
+        // Refresh employee list for scheduling
+        fetch("/api/employees").then((r) => r.ok ? r.json() : []).then(setEmployees).catch(() => undefined);
+      }
+    } finally {
+      setTogglingUser(null);
+    }
+  }
+
+  async function handleChangeRole(userId: string, newRole: string) {
+    setTogglingUser(userId);
+    try {
+      const res = await fetch("/api/manage-employees", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: userId, role: newRole }),
+      });
+      if (res.ok) {
+        setManagedUsers((prev) =>
+          prev.map((u) => u.id === userId ? { ...u, role: newRole } : u)
+        );
+      }
+    } finally {
+      setTogglingUser(null);
+    }
+  }
+
+  async function handlePublish() {
+    if (!scheduleStartDate) return;
+    setPublishing(true);
+    setPublishResult(null);
+    try {
+      const res = await fetch("/api/publish-schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ week_start: scheduleStartDate }),
+      });
+      const json = await res.json() as { ok: boolean; emailsSent?: number; emailError?: string; error?: string };
+      if (!res.ok) {
+        setPublishResult(`שגיאה: ${json.error ?? res.status}`);
+        return;
+      }
+      const emailNote = json.emailsSent
+        ? ` · נשלחו ${json.emailsSent} התראות במייל`
+        : json.emailError
+        ? ` · שגיאה בשליחת מיילים: ${json.emailError}`
+        : "";
+      setPublishResult(`הסידור לשבוע ${formatDateShort(scheduleStartDate)} פורסם — העובדים יראו אותו מעכשיו${emailNote}`);
+    } catch (err) {
+      setPublishResult(err instanceof Error ? err.message : "שגיאה בפרסום");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function loadShiftTypeRows() {
+    setShiftTypesTabLoading(true);
+    setShiftTypesTabError(null);
+    try {
+      const res  = await fetch("/api/shift-types");
+      const json = await res.json();
+      if (!res.ok) { setShiftTypesTabError(json.error ?? `HTTP ${res.status}`); return; }
+      setShiftTypeRows(json as ShiftTypeRow[]);
+    } catch (err) {
+      setShiftTypesTabError(err instanceof Error ? err.message : "שגיאה");
+    } finally {
+      setShiftTypesTabLoading(false);
+    }
+  }
+
+  async function handleSaveShiftType(row: ShiftTypeRow) {
+    setShiftTypesSaving(true);
+    try {
+      const res = await fetch("/api/shift-types", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(row),
+      });
+      if (res.ok) {
+        setShiftTypeRows((prev) => prev.map((r) => r.id === row.id ? row : r));
+        setEditingShiftType(null);
+      } else {
+        const j = await res.json();
+        setShiftTypesTabError(j.error ?? "שגיאה בעדכון");
+      }
+    } finally {
+      setShiftTypesSaving(false);
+    }
+  }
+
+  async function handleAddShiftType() {
+    setShiftTypesSaving(true);
+    try {
+      const res = await fetch("/api/shift-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newShiftType),
+      });
+      const j = await res.json();
+      if (res.ok) {
+        setShiftTypeRows((prev) => [...prev, j as ShiftTypeRow]);
+        setNewShiftType({ name: "", period: "morning", start_time: "", end_time: "" });
+        setAddingShiftType(false);
+      } else {
+        setShiftTypesTabError(j.error ?? "שגיאה בהוספה");
+      }
+    } finally {
+      setShiftTypesSaving(false);
+    }
+  }
+
+  async function handleDeleteShiftType(id: number) {
+    if (!window.confirm("למחוק את סוג המשמרת הזה?")) return;
+    const res = await fetch(`/api/shift-types?id=${id}`, { method: "DELETE" });
+    if (res.ok) {
+      setShiftTypeRows((prev) => prev.filter((r) => r.id !== id));
+    } else {
+      const j = await res.json();
+      setShiftTypesTabError(j.error ?? "שגיאה במחיקה");
+    }
+  }
+
+  async function loadWeekConstraints() {
+    const wStart = getUpcomingWeekStart();
+    const wEnd   = offsetDate(wStart, 6);
+    setWeekConstraintsLoading(true);
+    setWeekConstraintsError(null);
+    try {
+      const res  = await fetch(`/api/employee-constraints?from=${wStart}&to=${wEnd}`);
+      const json = await res.json();
+      if (!res.ok) { setWeekConstraintsError(json.error ?? `HTTP ${res.status}`); return; }
+      setWeekConstraints(json as WeekConstraintRow[]);
+    } catch (err) {
+      setWeekConstraintsError(err instanceof Error ? err.message : "שגיאה");
+    } finally {
+      setWeekConstraintsLoading(false);
+    }
+  }
+
+  // Load constraints as soon as the manager profile is confirmed
+  useEffect(() => {
+    if (profile) void loadWeekConstraints();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile]);
+
+  // Refresh employee list every 60 s so new registrations appear without a page reload
+  useEffect(() => {
+    if (!profile) return;
+    const id = setInterval(() => {
+      fetch("/api/employees").then((r) => r.ok ? r.json() : null).then((names: string[] | null) => {
+        if (names) setEmployees(names);
+      }).catch(() => undefined);
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [profile]);
+
+  // Warn before closing/refreshing with unsaved edits
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => { if (isDirty) e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
   if (profileLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -1289,9 +1516,55 @@ export default function ManagerDashboardPage() {
           )}
         </div>
 
+        {/* Tab Navigation */}
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setActiveTab("schedule")}
+            className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "schedule"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            סידור עבודה
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab("employees");
+              if (managedUsers.length === 0) void loadManagedUsers();
+            }}
+            className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "employees"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            ניהול עובדים
+          </button>
+          <button
+            onClick={() => {
+              setActiveTab("shifts");
+              if (shiftTypeRows.length === 0) void loadShiftTypeRows();
+            }}
+            className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+              activeTab === "shifts"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            סוגי משמרות
+          </button>
+        </div>
+
+        {activeTab === "schedule" && (<>
         {/* Actions */}
         <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
-          <h2 className="text-xl font-semibold text-gray-700">פעולות</h2>
+          <div>
+            <h2 className="text-xl font-semibold text-gray-700">פעולות</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              רצף מומלץ: <span className="font-medium text-blue-700">① צור</span> → <span className="font-medium text-yellow-700">② ערוך</span> → <span className="font-medium text-purple-700">③ שמור</span> → <span className="font-medium text-emerald-700">④ פרסם</span>
+            </p>
+          </div>
           {generateError && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               {generateError}
@@ -1315,13 +1588,6 @@ export default function ManagerDashboardPage() {
               className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
             >
               {generating ? "טוען אילוצים..." : "צור סידור עבודה"}
-            </button>
-            <button
-              onClick={handleAutoGenerate}
-              disabled={autoGenerating}
-              className="px-5 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-            >
-              {autoGenerating ? "מייצר..." : "צור סידור אוטומטי ושמור"}
             </button>
             <button
               onClick={handleLoadSaved}
@@ -1365,6 +1631,17 @@ export default function ManagerDashboardPage() {
             >
               {saving ? "שומר..." : "שמור סידור"}
             </button>
+            <button
+              onClick={handlePublish}
+              disabled={!schedule || publishing}
+              className={`px-5 py-2 font-medium rounded-lg transition-colors ${
+                schedule
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              {publishing ? "מפרסם..." : "פרסם סידור"}
+            </button>
           </div>
 
           {/* Save status */}
@@ -1376,6 +1653,15 @@ export default function ManagerDashboardPage() {
           {saveError && (
             <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               שגיאה בשמירה: {saveError}
+            </p>
+          )}
+          {publishResult && (
+            <p className={`text-sm rounded-lg px-3 py-2 border ${
+              publishResult.startsWith("שגיאה")
+                ? "text-red-700 bg-red-50 border-red-200"
+                : "text-emerald-700 bg-emerald-50 border-emerald-200"
+            }`}>
+              {publishResult.startsWith("שגיאה") ? "" : "✓ "}{publishResult}
             </p>
           )}
           {autoGenerateResult && (
@@ -1403,10 +1689,107 @@ export default function ManagerDashboardPage() {
               מצב עריכה פעיל — שנה עובדים ומשמרות בעזרת התפריטים בטבלה. בדיקת תקינות מתעדכנת בזמן אמת.
             </p>
           )}
+          {isDirty && (
+            <div className="flex items-center justify-between gap-3 text-sm text-orange-700 bg-orange-50 border border-orange-300 rounded-lg px-3 py-2">
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0 animate-pulse" />
+                יש שינויים לא שמורים — לחץ "שמור סידור" כדי לשמור
+              </span>
+              <button
+                onClick={handleLoadSaved}
+                disabled={loadingSaved}
+                className="shrink-0 text-xs font-medium text-orange-800 underline hover:text-orange-900 disabled:opacity-50"
+              >
+                שחזר לאחרון שמור
+              </button>
+            </div>
+          )}
           {schedule && stats && (stats.missingShifts > 0 || (scheduleValidation && scheduleValidation.hardCount > 0)) && (
             <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               הסידור מכיל בעיות — הקובץ יכלול את כל החוסרים וההפרות
             </p>
+          )}
+        </section>
+
+        {/* Constraints Overview */}
+        <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-700">אילוצי עובדים לשבוע הקרוב</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {formatDateShort(upcomingWeekStart)} – {formatDateShort(offsetDate(upcomingWeekStart, 6))}
+              </p>
+            </div>
+            <button
+              onClick={() => void loadWeekConstraints()}
+              disabled={weekConstraintsLoading}
+              className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
+            >
+              {weekConstraintsLoading ? "טוען..." : "רענן"}
+            </button>
+          </div>
+
+          {weekConstraintsError && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {weekConstraintsError}
+            </p>
+          )}
+
+          {weekConstraintsLoading && weekConstraints.length === 0 ? (
+            <p className="text-gray-400 text-sm">טוען אילוצים...</p>
+          ) : weekConstraints.length === 0 ? (
+            <div className="text-sm text-gray-400 bg-gray-50 border border-gray-200 rounded-xl px-4 py-6 text-center">
+              לא הוגשו אילוצים לשבוע הקרוב — כל העובדים פנויים
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">
+                {weekConstraints.length} אילוצים מ-{Array.from(new Set(weekConstraints.map((c) => c.employee_id))).length} עובדים
+              </p>
+              <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-gray-800 text-white">
+                      <th className="text-right px-4 py-2.5 font-semibold">עובד</th>
+                      {DAYS.map((day, i) => (
+                        <th key={i} className="text-center px-2 py-2.5 font-semibold">
+                          <div>{day}</div>
+                          <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(offsetDate(upcomingWeekStart, i))}</div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(new Set(weekConstraints.map((c) => c.employee_id))).sort().map((emp, idx) => (
+                      <tr key={emp} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
+                        <td className="px-4 py-2 font-medium text-gray-800 whitespace-nowrap">{emp}</td>
+                        {Array.from({ length: 7 }, (_, di) => {
+                          const date = offsetDate(upcomingWeekStart, di);
+                          const c = weekConstraints.find((x) => x.employee_id === emp && x.date_iso === date);
+                          if (!c) return <td key={di} className="px-2 py-2 text-center text-gray-200">—</td>;
+                          const isAllDay  = c.constraint_type === "all-day";
+                          const isMorning = c.constraint_type.startsWith("morning");
+                          const badgeCls  = isAllDay  ? "bg-red-100 text-red-700 border-red-200"
+                                          : isMorning ? "bg-amber-100 text-amber-700 border-amber-200"
+                                          :             "bg-indigo-100 text-indigo-700 border-indigo-200";
+                          const label     = isAllDay ? "כל היום" : isMorning ? "בוקר" : "ערב";
+                          return (
+                            <td key={di} className="px-2 py-2 text-center">
+                              <span
+                                className={`inline-block font-medium px-1.5 py-0.5 rounded border ${badgeCls}`}
+                                title={c.note || undefined}
+                              >
+                                {label}
+                              </span>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           )}
         </section>
 
@@ -1753,6 +2136,230 @@ export default function ManagerDashboardPage() {
             </ul>
           )}
         </section>
+
+        </>)}
+
+        {activeTab === "shifts" && (
+          <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-700">סוגי משמרות</h2>
+                <p className="text-xs text-gray-400 mt-0.5">שינויים כאן משפיעים על הטבלה בלבד — לא על מחולל הסידור (שמשתמש בתבניות המוקדות)</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => void loadShiftTypeRows()} disabled={shiftTypesTabLoading}
+                  className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors">
+                  {shiftTypesTabLoading ? "טוען..." : "רענן"}
+                </button>
+                <button onClick={() => setAddingShiftType(true)} disabled={addingShiftType}
+                  className="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+                  + הוסף משמרת
+                </button>
+              </div>
+            </div>
+
+            {shiftTypesTabError && (
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{shiftTypesTabError}</p>
+            )}
+
+            {addingShiftType && (
+              <div className="border border-blue-200 bg-blue-50 rounded-xl p-4 space-y-3">
+                <p className="text-sm font-semibold text-blue-800">משמרת חדשה</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <input value={newShiftType.name} onChange={(e) => setNewShiftType((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="שם (למשל: בוקר ראשי)"
+                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 col-span-2" />
+                  <select value={newShiftType.period} onChange={(e) => setNewShiftType((p) => ({ ...p, period: e.target.value }))}
+                    className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400">
+                    <option value="morning">בוקר</option>
+                    <option value="evening">ערב</option>
+                  </select>
+                  <input value={newShiftType.start_time} onChange={(e) => setNewShiftType((p) => ({ ...p, start_time: e.target.value }))}
+                    placeholder="התחלה (07:00)" className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                  <input value={newShiftType.end_time} onChange={(e) => setNewShiftType((p) => ({ ...p, end_time: e.target.value }))}
+                    placeholder="סיום (19:00)" className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => void handleAddShiftType()} disabled={shiftTypesSaving || !newShiftType.name}
+                    className="px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white rounded-lg transition-colors">
+                    {shiftTypesSaving ? "שומר..." : "הוסף"}
+                  </button>
+                  <button onClick={() => setAddingShiftType(false)}
+                    className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors">
+                    ביטול
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {shiftTypesTabLoading && shiftTypeRows.length === 0 ? (
+              <p className="text-gray-400 text-sm">טוען...</p>
+            ) : shiftTypeRows.length === 0 ? (
+              <p className="text-gray-400 text-sm">לא נמצאו סוגי משמרות</p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-800 text-white text-xs">
+                      <th className="text-right px-4 py-3 font-semibold">שם</th>
+                      <th className="text-center px-3 py-3 font-semibold">תקופה</th>
+                      <th className="text-center px-3 py-3 font-semibold">התחלה</th>
+                      <th className="text-center px-3 py-3 font-semibold">סיום</th>
+                      <th className="text-center px-3 py-3 font-semibold">פעולות</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shiftTypeRows.map((st, idx) => (
+                      <tr key={st.id} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
+                        {editingShiftType?.id === st.id ? (
+                          <>
+                            <td className="px-3 py-2">
+                              <input value={editingShiftType.name}
+                                onChange={(e) => setEditingShiftType((p) => p ? { ...p, name: e.target.value } : p)}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs w-full focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <select value={editingShiftType.period}
+                                onChange={(e) => setEditingShiftType((p) => p ? { ...p, period: e.target.value } : p)}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400">
+                                <option value="morning">בוקר</option>
+                                <option value="evening">ערב</option>
+                              </select>
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <input value={editingShiftType.start_time}
+                                onChange={(e) => setEditingShiftType((p) => p ? { ...p, start_time: e.target.value } : p)}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs w-20 text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <input value={editingShiftType.end_time}
+                                onChange={(e) => setEditingShiftType((p) => p ? { ...p, end_time: e.target.value } : p)}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs w-20 text-center focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <div className="flex gap-1 justify-center">
+                                <button onClick={() => void handleSaveShiftType(editingShiftType)} disabled={shiftTypesSaving}
+                                  className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50">שמור</button>
+                                <button onClick={() => setEditingShiftType(null)}
+                                  className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 rounded transition-colors">ביטול</button>
+                              </div>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-4 py-3 font-semibold text-gray-800">{st.name}</td>
+                            <td className="px-3 py-3 text-center">
+                              <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${st.period === "morning" ? "bg-sky-100 text-sky-700" : "bg-indigo-100 text-indigo-700"}`}>
+                                {st.period === "morning" ? "בוקר" : "ערב"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-3 text-center font-mono text-gray-600">{st.start_time}</td>
+                            <td className="px-3 py-3 text-center font-mono text-gray-600">{st.end_time}</td>
+                            <td className="px-3 py-3 text-center">
+                              <div className="flex gap-1 justify-center">
+                                <button onClick={() => setEditingShiftType(st)}
+                                  className="px-2 py-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 rounded transition-colors">ערוך</button>
+                                <button onClick={() => void handleDeleteShiftType(st.id)}
+                                  className="px-2 py-1 text-xs bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded transition-colors">מחק</button>
+                              </div>
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === "employees" && (
+          <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h2 className="text-xl font-semibold text-gray-700">ניהול עובדים</h2>
+              <button
+                onClick={() => void loadManagedUsers()}
+                disabled={managedLoading}
+                className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
+              >
+                {managedLoading ? "טוען..." : "רענן"}
+              </button>
+            </div>
+            {managedError && (
+              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{managedError}</p>
+            )}
+            {managedLoading && managedUsers.length === 0 ? (
+              <p className="text-gray-400 text-sm">טוען עובדים...</p>
+            ) : managedUsers.length === 0 ? (
+              <p className="text-gray-400 text-sm">לא נמצאו משתמשים</p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-800 text-white text-xs">
+                      <th className="text-right px-4 py-3 font-semibold">שם</th>
+                      <th className="text-center px-3 py-3 font-semibold">תפקיד</th>
+                      <th className="text-center px-3 py-3 font-semibold">סטטוס</th>
+                      <th className="text-center px-3 py-3 font-semibold">פעולות</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {managedUsers.map((u, idx) => (
+                      <tr
+                        key={u.id}
+                        className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}
+                      >
+                        <td className="px-4 py-3 font-medium text-gray-800">{u.name || "—"}</td>
+                        <td className="px-3 py-3 text-center">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                            u.role === "manager"
+                              ? "bg-purple-100 text-purple-700"
+                              : "bg-blue-100 text-blue-700"
+                          }`}>
+                            {u.role === "manager" ? "מנהל" : "עובד"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                            u.is_active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {u.is_active ? "פעיל" : "לא פעיל"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              onClick={() => void handleToggleActive(u.id, u.is_active)}
+                              disabled={togglingUser === u.id}
+                              className={`px-3 py-1 text-xs font-medium rounded-lg border transition-colors disabled:opacity-50 ${
+                                u.is_active
+                                  ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                  : "bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
+                              }`}
+                            >
+                              {u.is_active ? "השבת" : "הפעל"}
+                            </button>
+                            <button
+                              onClick={() => void handleChangeRole(u.id, u.role === "manager" ? "employee" : "manager")}
+                              disabled={togglingUser === u.id}
+                              className="px-3 py-1 text-xs font-medium rounded-lg border bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100 transition-colors disabled:opacity-50"
+                            >
+                              {u.role === "manager" ? "הפוך לעובד" : "הפוך למנהל"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="text-xs text-gray-400">
+              השבתת עובד מונעת ממנו להופיע בסידורים עתידיים. שינוי תפקיד לא משפיע על ההרשאות בזמן אמת — רק לאחר כניסה מחדש.
+            </p>
+          </section>
+        )}
 
       </div>
     </div>
