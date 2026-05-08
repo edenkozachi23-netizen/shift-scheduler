@@ -799,7 +799,7 @@ export default function ManagerDashboardPage() {
   const router = useRouter();
 
   // ── Employees (loaded from DB) ────────────────────────────────────────────
-  const [employees, setEmployees] = useState<string[]>([...ALL_EMPLOYEES]);
+  const [employees, setEmployees] = useState<string[]>([]);
 
   // ── Auth / profile ─────────────────────────────────────────────────────────
   const [profile, setProfile]           = useState<Profile | null>(null);
@@ -815,10 +815,9 @@ export default function ManagerDashboardPage() {
           return;
         }
         setProfile(json);
-        // Load employees from DB (falls back to hardcoded list on error)
         fetch("/api/employees")
-          .then((r) => r.ok ? r.json() : null)
-          .then((names: string[] | null) => { if (names && names.length > 0) setEmployees(names); })
+          .then((r) => r.ok ? r.json() : [])
+          .then((names: string[]) => setEmployees(names))
           .catch(() => undefined);
       })
       .catch(() => router.replace("/login"))

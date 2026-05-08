@@ -41,18 +41,16 @@ export async function POST(_request: Request) {
   const weekStart = getUpcomingWeekStart();
   const weekEnd   = offsetDate(weekStart, 6);
 
-  // 0. Fetch active employees from DB (fallback to hardcoded list)
-  let employeeList: string[] = [...EMPLOYEES];
-  try {
-    const eRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/users?role=eq.employee&is_active=eq.true&select=name&order=name.asc`,
-      { headers: dbHeaders(), cache: "no-store" }
-    );
-    if (eRes.ok) {
-      const rows = await eRes.json() as { name: string }[];
-      if (rows.length > 0) employeeList = rows.map((r) => r.name);
-    }
-  } catch { /* use fallback */ }
+  // 0. Fetch active employees from DB
+  const eRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/users?role=eq.employee&is_active=eq.true&select=name&order=name.asc`,
+    { headers: dbHeaders(), cache: "no-store" }
+  );
+  if (!eRes.ok) {
+    return NextResponse.json({ error: "Failed to fetch employees" }, { status: 500 });
+  }
+  const empRows = await eRes.json() as { name: string }[];
+  const employeeList: string[] = empRows.map((r) => r.name);
 
   // 1. Fetch constraints for the upcoming week
   const cRes = await fetch(
