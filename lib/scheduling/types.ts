@@ -29,7 +29,9 @@ export type ConstraintType =
   | "morning-07-19"
   | "morning-08-20"
   | "evening-19-07"
-  | "evening-20-08";
+  | "evening-20-08"
+  | "morning-from-08"   // can work morning but only from 08:00 (blocks morning-07-19)
+  | "evening-from-20";  // can work evening but only from 20:00 (blocks evening-19-07)
 
 export type Constraint = {
   employee: string;

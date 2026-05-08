@@ -86,6 +86,26 @@ export function canAssignEmployeeToShift(
     );
   }
 
+  // Rule 2.5: start-time preference — can work the period but only from the
+  //           later start time; blocks the earlier template only.
+  const hasStartTimeConstraint = constraints.some(
+    (c) =>
+      c.employee === employee &&
+      c.date === targetDate &&
+      (
+        (c.constraintType === "morning-from-08" && targetTemplate.shiftTemplateId === "morning-07-19") ||
+        (c.constraintType === "evening-from-20" && targetTemplate.shiftTemplateId === "evening-19-07")
+      )
+  );
+  if (hasStartTimeConstraint) {
+    const fromTime = targetTemplate.shiftTemplateId === "morning-07-19" ? "08:00" : "20:00";
+    return {
+      allowed: false,
+      reason: `${employee} זמין/ה רק מ-${fromTime} בתאריך ${targetDate}`,
+      ruleCode: "start-time-preference",
+    };
+  }
+
   // Shift is identified by date + period (not by templateId)
   const targetShift = currentSchedule.find(
     (s) => s.date === targetDate && s.period === targetPeriod

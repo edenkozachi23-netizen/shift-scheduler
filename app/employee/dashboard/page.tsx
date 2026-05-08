@@ -15,17 +15,21 @@ const DAYS_HE = ["ראשון", "שני", "שלישי", "רביעי", "חמישי
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 const CONSTRAINT_OPTIONS: { value: ConstraintType; label: string }[] = [
-  { value: "all-day",       label: "כל היום" },
-  { value: "morning-07-19", label: "בוקר" },
-  { value: "evening-19-07", label: "ערב" },
+  { value: "all-day",         label: "כל היום" },
+  { value: "morning-07-19",   label: "בוקר (לא יכול בכלל)" },
+  { value: "morning-from-08", label: "בוקר רק מ-08:00" },
+  { value: "evening-19-07",   label: "ערב (לא יכול בכלל)" },
+  { value: "evening-from-20", label: "ערב רק מ-20:00" },
 ];
 
 const CONSTRAINT_LABELS: Record<ConstraintType, string> = {
-  "all-day":       "כל היום",
-  "morning-07-19": "בוקר",
-  "morning-08-20": "בוקר",
-  "evening-19-07": "ערב",
-  "evening-20-08": "ערב",
+  "all-day":         "כל היום",
+  "morning-07-19":   "בוקר (לא יכול בכלל)",
+  "morning-08-20":   "בוקר (לא יכול בכלל)",
+  "morning-from-08": "בוקר רק מ-08:00",
+  "evening-19-07":   "ערב (לא יכול בכלל)",
+  "evening-20-08":   "ערב (לא יכול בכלל)",
+  "evening-from-20": "ערב רק מ-20:00",
 };
 
 type DbConstraint = {
