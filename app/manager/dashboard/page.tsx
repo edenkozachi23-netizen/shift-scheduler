@@ -950,12 +950,14 @@ export default function ManagerDashboardPage() {
           : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
       );
 
-      // Only auto-assign employees who submitted constraints — leave the rest for the manager
-      const eligibleEmployees = employees.filter((e) => employeesWithConstraints.has(e));
+      // Use all active employees; fall back to constraint submitters if employees list is empty
+      const allActiveEmployees = employees.length > 0
+        ? employees
+        : Array.from(employeesWithConstraints);
 
       const result = generateSchedule(
         buildShiftSlots(startDate, endDate),
-        eligibleEmployees,
+        allActiveEmployees,
         constraints
       );
       setSchedule(engineToUISchedule(result.schedule, startDate));
@@ -1310,19 +1312,19 @@ export default function ManagerDashboardPage() {
 
   async function handleToggleActive(userId: string, currentActive: boolean) {
     setTogglingUser(userId);
+    setManagedError(null);
     try {
       const res = await fetch("/api/manage-employees", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: userId, is_active: !currentActive }),
       });
-      if (res.ok) {
-        setManagedUsers((prev) =>
-          prev.map((u) => u.id === userId ? { ...u, is_active: !currentActive } : u)
-        );
-        // Refresh employee list for scheduling
-        fetch("/api/employees").then((r) => r.ok ? r.json() : []).then(setEmployees).catch(() => undefined);
-      }
+      const json = await res.json();
+      if (!res.ok) { setManagedError(json.error ?? `HTTP ${res.status}`); return; }
+      setManagedUsers((prev) =>
+        prev.map((u) => u.id === userId ? { ...u, is_active: !currentActive } : u)
+      );
+      fetch("/api/employees").then((r) => r.ok ? r.json() : []).then(setEmployees).catch(() => undefined);
     } finally {
       setTogglingUser(null);
     }
@@ -1330,17 +1332,18 @@ export default function ManagerDashboardPage() {
 
   async function handleChangeRole(userId: string, newRole: string) {
     setTogglingUser(userId);
+    setManagedError(null);
     try {
       const res = await fetch("/api/manage-employees", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: userId, role: newRole }),
       });
-      if (res.ok) {
-        setManagedUsers((prev) =>
-          prev.map((u) => u.id === userId ? { ...u, role: newRole } : u)
-        );
-      }
+      const json = await res.json();
+      if (!res.ok) { setManagedError(json.error ?? `HTTP ${res.status}`); return; }
+      setManagedUsers((prev) =>
+        prev.map((u) => u.id === userId ? { ...u, role: newRole } : u)
+      );
     } finally {
       setTogglingUser(null);
     }
@@ -1775,12 +1778,16 @@ export default function ManagerDashboardPage() {
                           const label     = isAllDay ? "כל היום" : isMorning ? "בוקר" : "ערב";
                           return (
                             <td key={di} className="px-2 py-2 text-center">
-                              <span
-                                className={`inline-block font-medium px-1.5 py-0.5 rounded border ${badgeCls}`}
-                                title={c.note || undefined}
-                              >
-                                {label}
-                              </span>
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className={`inline-block font-medium px-1.5 py-0.5 rounded border ${badgeCls}`}>
+                                  {label}
+                                </span>
+                                {c.note && (
+                                  <span className="text-gray-500 text-xs leading-tight max-w-[72px] text-center break-words">
+                                    {c.note}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                           );
                         })}

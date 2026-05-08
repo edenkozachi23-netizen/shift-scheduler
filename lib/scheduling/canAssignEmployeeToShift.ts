@@ -43,12 +43,16 @@ export function canAssignEmployeeToShift(
   // Rule 2: period constraint — any template constraint whose period prefix matches
   //         the target period blocks the employee from that entire period.
   //         e.g. "morning-07-19" OR "morning-08-20" both block ALL morning assignments.
+  //         "morning-from-08" and "evening-from-20" are soft start-time preferences
+  //         handled by Rule 2.5 and must NOT be caught here.
   const periodPrefix = targetTemplate.period + "-";
   const matchingPeriodConstraints = constraints.filter(
     (c) =>
       c.employee === employee &&
       c.date === targetDate &&
       c.constraintType !== "all-day" &&
+      c.constraintType !== "morning-from-08" &&
+      c.constraintType !== "evening-from-20" &&
       c.constraintType.startsWith(periodPrefix)
   );
   if (matchingPeriodConstraints.length > 0) {

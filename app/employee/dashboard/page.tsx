@@ -56,17 +56,19 @@ function getSchedulingPeriod(isoDate: string): SchedulingPeriod {
   const [year, month, day] = isoDate.split("-").map(Number);
   let start: string, end: string;
   if (day >= 20) {
+    // Submission window for next month's schedule: 20th this month → 10th next month
     const nextMonth = month === 12 ? 1 : month + 1;
     const nextYear  = month === 12 ? year + 1 : year;
     start = `${year}-${String(month).padStart(2, "0")}-20`;
-    end   = `${nextYear}-${String(nextMonth).padStart(2, "0")}-19`;
+    end   = `${nextYear}-${String(nextMonth).padStart(2, "0")}-10`;
   } else {
+    // In the window that started on the 20th of last month, ending 10th of this month
     const prevMonth = month === 1 ? 12 : month - 1;
     const prevYear  = month === 1 ? year - 1 : year;
     start = `${prevYear}-${String(prevMonth).padStart(2, "0")}-20`;
-    end   = `${year}-${String(month).padStart(2, "0")}-19`;
+    end   = `${year}-${String(month).padStart(2, "0")}-10`;
   }
-  const fmt = (s: string) => { const [y,m,d] = s.split("-").map(Number); return `${d}/${m}/${y}`; };
+  const fmt = (s: string) => { const [,m,d] = s.split("-").map(Number); return `${d}/${m}`; };
   return { start, end, label: `${fmt(start)} – ${fmt(end)}` };
 }
 
@@ -606,21 +608,24 @@ export default function EmployeeDashboardPage() {
             <p className="text-xs text-gray-400 mt-0.5">הגש אילוץ לכל הימים הנבחרים בארבעת השבועות הקרובים</p>
           </div>
           <div className="px-5 py-4 space-y-4">
-            {/* Day of week checkboxes */}
+            {/* Day of week checkboxes — Sunday to Thursday only */}
             <div className="flex flex-wrap gap-2">
-              {DAYS_HE.map((label, dow) => (
-                <button
-                  key={dow}
-                  onClick={() => setRecurDays(prev => prev.includes(dow) ? prev.filter(d => d !== dow) : [...prev, dow])}
-                  className={`px-3 py-1.5 text-sm rounded-lg border font-medium transition-colors ${
-                    recurDays.includes(dow)
-                      ? "bg-blue-600 border-blue-600 text-white"
-                      : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
+              {DAYS_HE.map((label, dow) => {
+                if (dow === 5 || dow === 6) return null;
+                return (
+                  <button
+                    key={dow}
+                    onClick={() => setRecurDays(prev => prev.includes(dow) ? prev.filter(d => d !== dow) : [...prev, dow])}
+                    className={`px-3 py-1.5 text-sm rounded-lg border font-medium transition-colors ${
+                      recurDays.includes(dow)
+                        ? "bg-blue-600 border-blue-600 text-white"
+                        : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex gap-2">

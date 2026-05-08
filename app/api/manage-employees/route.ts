@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const SUPER_MANAGER_EMAIL = process.env.NEXT_PUBLIC_SUPER_MANAGER_EMAIL ?? "";
 
 const dbHeaders = (extra?: Record<string, string>) => ({
   apikey: SUPABASE_KEY,
@@ -20,7 +21,6 @@ type UserRow = {
 };
 
 // ─── GET /api/manage-employees ────────────────────────────────────────────────
-// Manager only. Returns all users from public.users.
 export async function GET() {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -42,8 +42,8 @@ export async function GET() {
 }
 
 // ─── PATCH /api/manage-employees ─────────────────────────────────────────────
-// Manager only. Updates a single field (is_active or role) for the given user.
-// Cannot change own role.
+// Accepts flat body: { id, is_active?, role? }
+// Cannot change own role or touch the super-manager's role/active status.
 export async function PATCH(request: Request) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -52,31 +52,50 @@ export async function PATCH(request: Request) {
 
   const body = (await request.json()) as {
     id: string;
-    field: "is_active" | "role";
-    value: boolean | string;
+    is_active?: boolean;
+    role?: string;
   };
 
-  const { id, field, value } = body;
+  const { id, is_active, role } = body;
 
-  if (!id || !field || value === undefined) {
-    return NextResponse.json({ error: "Missing required fields: id, field, value" }, { status: 400 });
-  }
-
-  if (field !== "is_active" && field !== "role") {
-    return NextResponse.json({ error: "field must be 'is_active' or 'role'" }, { status: 400 });
+  if (!id) return NextResponse.json({ error: "Missing required field: id" }, { status: 400 });
+  if (is_active === undefined && role === undefined) {
+    return NextResponse.json({ error: "Must provide is_active or role" }, { status: 400 });
   }
 
   // Prevent manager from changing their own role
-  if (field === "role" && id === user.id) {
+  if (role !== undefined && id === user.id) {
     return NextResponse.json({ error: "Cannot change your own role" }, { status: 403 });
   }
+
+  // Protect super manager from role changes or deactivation
+  if (SUPER_MANAGER_EMAIL) {
+    // Fetch the target user's email from auth to compare
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (serviceKey) {
+      const authRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${id}`, {
+        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+        cache: "no-store",
+      });
+      if (authRes.ok) {
+        const authUser = await authRes.json() as { email?: string };
+        if (authUser.email?.toLowerCase() === SUPER_MANAGER_EMAIL.toLowerCase()) {
+          return NextResponse.json({ error: "לא ניתן לשנות הרשאות מנהל ראשי" }, { status: 403 });
+        }
+      }
+    }
+  }
+
+  const updateFields: Record<string, unknown> = {};
+  if (is_active !== undefined) updateFields.is_active = is_active;
+  if (role !== undefined) updateFields.role = role;
 
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/users?id=eq.${id}`,
     {
       method: "PATCH",
       headers: dbHeaders({ Prefer: "return=minimal" }),
-      body: JSON.stringify({ [field]: value }),
+      body: JSON.stringify(updateFields),
     }
   );
 

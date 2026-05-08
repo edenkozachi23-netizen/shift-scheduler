@@ -26,6 +26,8 @@ function LoginPageInner() {
   const [displayName, setDisplayName] = useState("");
   const [role, setRole]               = useState<"employee" | "manager">("employee");
 
+  const [managerCode, setManagerCode] = useState("");
+
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState<string | null>(null);
   const [info, setInfo]               = useState<string | null>(null);
@@ -77,6 +79,14 @@ function LoginPageInner() {
     if (password.length < 6) {
       setError("הסיסמה חייבת להכיל לפחות 6 תווים");
       return;
+    }
+
+    if (role === "manager") {
+      const expectedCode = process.env.NEXT_PUBLIC_MANAGER_INVITE_CODE;
+      if (expectedCode && managerCode !== expectedCode) {
+        setError("קוד הרשמה למנהל שגוי");
+        return;
+      }
     }
 
     setLoading(true);
@@ -274,16 +284,25 @@ function LoginPageInner() {
               <Field label="תפקיד">
                 <select
                   value={role}
-                  onChange={(e) => setRole(e.target.value as "employee" | "manager")}
+                  onChange={(e) => { setRole(e.target.value as "employee" | "manager"); setManagerCode(""); }}
                   className={INPUT}
                 >
                   <option value="employee">עובד</option>
                   <option value="manager">מנהל</option>
                 </select>
-                <p className="text-xs text-amber-600 mt-1">
-                  בסביבת ייצור, תפקיד מנהל מוענק על-ידי מנהל המערכת בלבד.
-                </p>
               </Field>
+
+              {role === "manager" && (
+                <Field label="קוד הרשמה למנהל" hint="קבל קוד זה ממנהל המערכת">
+                  <input
+                    type="text"
+                    value={managerCode}
+                    onChange={(e) => setManagerCode(e.target.value)}
+                    placeholder="הכנס קוד הזמנה"
+                    className={INPUT}
+                  />
+                </Field>
+              )}
 
               <Field label="אימייל">
                 <input
