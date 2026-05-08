@@ -837,6 +837,8 @@ export default function ManagerDashboardPage() {
   const [generateError, setGenerateError]   = useState<string | null>(null);
   const [constraintInfo, setConstraintInfo] = useState<string | null>(null);
   const [missingConstraints, setMissingConstraints] = useState<string[]>([]);
+  const [autoGenerating, setAutoGenerating] = useState(false);
+  const [autoGenerateResult, setAutoGenerateResult] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -907,20 +909,69 @@ export default function ManagerDashboardPage() {
           : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
       );
 
+      // Only auto-assign employees who submitted constraints — leave the rest for the manager
+      const eligibleEmployees = EMPLOYEES.filter((e) => employeesWithConstraints.has(e));
+
       const result = generateSchedule(
         buildShiftSlots(startDate, endDate),
-        EMPLOYEES,
+        eligibleEmployees,
         constraints
       );
       setSchedule(engineToUISchedule(result.schedule, startDate));
       setScheduleStartDate(startDate);
-      setEditMode(false);
+      setEditMode(true);
     } catch (err) {
       setGenerateError(
         err instanceof Error ? err.message : "שגיאה בלתי צפויה — הסידור לא נוצר"
       );
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleAutoGenerate() {
+    setAutoGenerating(true);
+    setAutoGenerateResult(null);
+    try {
+      const res = await fetch("/api/schedule/auto-generate", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok) {
+        setAutoGenerateResult(`שגיאה: ${json.error ?? res.status}`);
+        return;
+      }
+      const weekStart = json.weekStart as string;
+      const weekEnd = json.weekEnd as string;
+      const entriesRes = await fetch(`/api/schedule-entries?from=${weekStart}&to=${weekEnd}`);
+      const dbEntries = await entriesRes.json() as {
+        date: string;
+        period: string;
+        employee_id: string;
+        shift_template_id: string;
+      }[];
+      const uiSched: Schedule = Array.from({ length: 7 }, (_, i) => {
+        const date = offsetDate(weekStart, i);
+        const dayEntries = dbEntries.filter((e) => e.date === date);
+        const toSlots = (period: "morning" | "evening"): Shift => {
+          const slots = dayEntries.filter((e) => e.period === period);
+          return [
+            slots[0] ? { employee: slots[0].employee_id, templateId: slots[0].shift_template_id } : "",
+            slots[1] ? { employee: slots[1].employee_id, templateId: slots[1].shift_template_id } : "",
+          ];
+        };
+        return { morning: toSlots("morning"), evening: toSlots("evening") };
+      });
+      setSchedule(uiSched);
+      setScheduleStartDate(weekStart);
+      setEditMode(false);
+      setLastSaved(new Date().toLocaleTimeString("he-IL"));
+      setAutoGenerateResult(
+        `סידור נוצר ונשמר אוטומטית — ${json.entriesSaved} שיבוצים לשבוע ${formatDateShort(weekStart)}–${formatDateShort(weekEnd)}`
+      );
+      await loadHistoricalStats();
+    } catch (err) {
+      setAutoGenerateResult(err instanceof Error ? err.message : "שגיאה");
+    } finally {
+      setAutoGenerating(false);
     }
   }
 
@@ -1215,6 +1266,13 @@ export default function ManagerDashboardPage() {
               {generating ? "טוען אילוצים..." : "צור סידור עבודה"}
             </button>
             <button
+              onClick={handleAutoGenerate}
+              disabled={autoGenerating}
+              className="px-5 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+            >
+              {autoGenerating ? "מייצר..." : "צור סידור אוטומטי ושמור"}
+            </button>
+            <button
               onClick={() => schedule && setEditMode((v) => !v)}
               disabled={!schedule}
               className={`px-5 py-2 font-medium rounded-lg transition-colors text-white ${
@@ -1260,6 +1318,15 @@ export default function ManagerDashboardPage() {
           {saveError && (
             <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               שגיאה בשמירה: {saveError}
+            </p>
+          )}
+          {autoGenerateResult && (
+            <p className={`text-sm rounded-lg px-3 py-2 border ${
+              autoGenerateResult.startsWith("שגיאה")
+                ? "text-red-700 bg-red-50 border-red-200"
+                : "text-teal-700 bg-teal-50 border-teal-200"
+            }`}>
+              {autoGenerateResult.startsWith("שגיאה") ? "" : "✓ "}{autoGenerateResult}
             </p>
           )}
 
