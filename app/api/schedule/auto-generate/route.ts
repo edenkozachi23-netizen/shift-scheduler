@@ -2,11 +2,10 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateSchedule, buildShiftSlots } from "@/lib/scheduling/generateSchedule";
 import type { Constraint, ConstraintType } from "@/lib/scheduling/types";
+import { EMPLOYEES } from "@/lib/employees";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-const EMPLOYEES = ["עדן", "נועה", "שחר", "מאיה", "רון", "דניאל", "יובל", "עמית"];
 
 function getUpcomingWeekStart(): string {
   const today = new Date();

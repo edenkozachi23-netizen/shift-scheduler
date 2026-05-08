@@ -25,18 +25,6 @@ export function canAssignEmployeeToShift(
 ): CanAssignResult {
   const { period: targetPeriod } = targetTemplate;
 
-  // ── DEBUG: log every check involving a constraint for this employee/date ──
-  const relevantConstraints = constraints.filter(
-    (c) => c.employee === employee && c.date === targetDate
-  );
-  if (relevantConstraints.length > 0) {
-    console.log(
-      `[ENGINE] checking employee="${employee}" date="${targetDate}" period="${targetPeriod}" template="${targetTemplate.shiftTemplateId}"`,
-      "\n  constraints for this employee+date:", JSON.stringify(relevantConstraints)
-    );
-  }
-  // ── END DEBUG ────────────────────────────────────────────────────────────
-
   // Rule 1: all-day constraint — blocks every shift template on this date
   const hasAllDayConstraint = constraints.some(
     (c) =>
@@ -45,7 +33,6 @@ export function canAssignEmployeeToShift(
       c.constraintType === "all-day"
   );
   if (hasAllDayConstraint) {
-    console.log(`[ENGINE] ✓ BLOCKED by all-day constraint: employee="${employee}" date="${targetDate}"`);
     return {
       allowed: false,
       reason: `ל-${employee} יש אילוץ יום שלם בתאריך ${targetDate}`,
@@ -65,25 +52,12 @@ export function canAssignEmployeeToShift(
       c.constraintType.startsWith(periodPrefix)
   );
   if (matchingPeriodConstraints.length > 0) {
-    console.log(`[ENGINE] ✓ BLOCKED by period constraint: employee="${employee}" date="${targetDate}" period="${targetPeriod}"`, matchingPeriodConstraints);
     const periodHe = targetTemplate.period === "morning" ? "בוקר" : "ערב";
     return {
       allowed: false,
       reason: `ל-${employee} יש אילוץ ל${periodHe} בתאריך ${targetDate}`,
       ruleCode: "constraint-template",
     };
-  }
-
-  // DEBUG: if this employee has constraints but none matched, log why
-  if (relevantConstraints.length > 0) {
-    console.warn(
-      `[ENGINE] ⚠️ constraints exist for employee="${employee}" date="${targetDate}" but NONE matched period="${targetPeriod}":`,
-      relevantConstraints.map((c) => ({
-        constraintType: c.constraintType,
-        startsWith_periodPrefix: c.constraintType.startsWith(periodPrefix),
-        periodPrefix,
-      }))
-    );
   }
 
   // Rule 2.5: start-time preference — can work the period but only from the

@@ -20,6 +20,7 @@ import {
   type ExportViolation,
   type ExportInsight,
 } from "@/lib/export/exportScheduleToExcel";
+import { EMPLOYEES as ALL_EMPLOYEES } from "@/lib/employees";
 
 // ─── Supabase shift type (from API) ──────────────────────────────────────────
 
@@ -38,7 +39,7 @@ type Shift = [SlotValue, SlotValue];
 type DaySchedule = { morning: Shift; evening: Shift };
 type Schedule = DaySchedule[];
 
-const EMPLOYEES = ["עדן", "נועה", "שחר", "מאיה", "רון", "דניאל", "יובל", "עמית"];
+const EMPLOYEES = [...ALL_EMPLOYEES];
 const DAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -839,6 +840,9 @@ export default function ManagerDashboardPage() {
   const [missingConstraints, setMissingConstraints] = useState<string[]>([]);
   const [autoGenerating, setAutoGenerating] = useState(false);
   const [autoGenerateResult, setAutoGenerateResult] = useState<string | null>(null);
+  const [generateSummary, setGenerateSummary] = useState<string | null>(null);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [loadSavedError, setLoadSavedError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -920,12 +924,53 @@ export default function ManagerDashboardPage() {
       setSchedule(engineToUISchedule(result.schedule, startDate));
       setScheduleStartDate(startDate);
       setEditMode(true);
+      const totalSlots = 14; // 7 days × 2 periods × 2 employees = 28, but we count shifts (14 shift-slots of 2 each)
+      const filledSlots = result.schedule.reduce((sum, e) => sum + e.assignments.length, 0);
+      const emptySlots = 28 - filledSlots;
+      setGenerateSummary(
+        emptySlots === 0
+          ? `הסידור מלא — ${filledSlots} שיבוצים`
+          : `${filledSlots} שיבוצים הוכנסו אוטומטית · ${emptySlots} חסרים להשלמה ידנית`
+      );
+      void totalSlots;
     } catch (err) {
       setGenerateError(
         err instanceof Error ? err.message : "שגיאה בלתי צפויה — הסידור לא נוצר"
       );
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function handleLoadSaved() {
+    setLoadingSaved(true);
+    setLoadSavedError(null);
+    try {
+      const weekStart = getUpcomingWeekStart();
+      const weekEnd   = offsetDate(weekStart, 6);
+      const res = await fetch(`/api/schedule-entries?from=${weekStart}&to=${weekEnd}`);
+      const json = await res.json();
+      if (!res.ok) { setLoadSavedError(json.error ?? `HTTP ${res.status}`); return; }
+      const dbEntries = json as { date: string; period: string; employee_id: string; shift_template_id: string }[];
+      if (dbEntries.length === 0) { setLoadSavedError("לא נמצא סידור שמור לשבוע הקרוב"); return; }
+      const uiSched: Schedule = Array.from({ length: 7 }, (_, i) => {
+        const date = offsetDate(weekStart, i);
+        const dayEntries = dbEntries.filter((e) => e.date === date);
+        const toSlots = (period: "morning" | "evening"): Shift => {
+          const slots = dayEntries.filter((e) => e.period === period);
+          return [
+            slots[0] ? { employee: slots[0].employee_id, templateId: slots[0].shift_template_id } : "",
+            slots[1] ? { employee: slots[1].employee_id, templateId: slots[1].shift_template_id } : "",
+          ];
+        };
+        return { morning: toSlots("morning"), evening: toSlots("evening") };
+      });
+      setSchedule(uiSched);
+      setScheduleStartDate(weekStart);
+      setEditMode(false);
+      setGenerateSummary(null);
+    } finally {
+      setLoadingSaved(false);
     }
   }
 
@@ -1273,6 +1318,13 @@ export default function ManagerDashboardPage() {
               {autoGenerating ? "מייצר..." : "צור סידור אוטומטי ושמור"}
             </button>
             <button
+              onClick={handleLoadSaved}
+              disabled={loadingSaved}
+              className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+            >
+              {loadingSaved ? "טוען..." : "טען סידור שמור"}
+            </button>
+            <button
               onClick={() => schedule && setEditMode((v) => !v)}
               disabled={!schedule}
               className={`px-5 py-2 font-medium rounded-lg transition-colors text-white ${
@@ -1327,6 +1379,16 @@ export default function ManagerDashboardPage() {
                 : "text-teal-700 bg-teal-50 border-teal-200"
             }`}>
               {autoGenerateResult.startsWith("שגיאה") ? "" : "✓ "}{autoGenerateResult}
+            </p>
+          )}
+          {generateSummary && !generateError && (
+            <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+              {generateSummary}
+            </p>
+          )}
+          {loadSavedError && (
+            <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {loadSavedError}
             </p>
           )}
 
