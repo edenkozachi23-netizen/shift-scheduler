@@ -847,7 +847,17 @@ export default function ManagerDashboardPage() {
         setProfile(json);
         fetch("/api/employees")
           .then((r) => r.ok ? r.json() : [])
-          .then((names: string[]) => setEmployees(names))
+          .then((names: string[]) => {
+            if (names.length > 0) { setEmployees(names); return; }
+            // Fallback: get all unique employee names from the constraints table
+            return fetch("/api/employee-constraints")
+              .then((r) => r.ok ? r.json() : [])
+              .then((rows: { employee_id?: string; id?: string }[]) => {
+                const all = Array.from(new Set(rows.map((r) => r.employee_id).filter(Boolean) as string[]))
+                  .sort((a, b) => a.localeCompare(b, "he"));
+                if (all.length > 0) setEmployees(all);
+              });
+          })
           .catch(() => undefined);
       })
       .catch(() => router.replace("/login"))
@@ -1476,7 +1486,20 @@ export default function ManagerDashboardPage() {
       const res  = await fetch(`/api/employee-constraints?from=${wStart}&to=${wEnd}`);
       const json = await res.json();
       if (!res.ok) { setWeekConstraintsError(json.error ?? `HTTP ${res.status}`); return; }
-      setWeekConstraints(json as WeekConstraintRow[]);
+      const rows = json as WeekConstraintRow[];
+      setWeekConstraints(rows);
+      // Populate employees from constraints if the employee list is still empty
+      if (rows.length > 0) {
+        const names = Array.from(new Set(rows.map((r) => r.employee_id)))
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b, "he"));
+        if (names.length > 0) {
+          setEmployees((prev) => {
+            if (prev.length > 0) return prev;
+            return names;
+          });
+        }
+      }
     } catch (err) {
       setWeekConstraintsError(err instanceof Error ? err.message : "שגיאה");
     } finally {
