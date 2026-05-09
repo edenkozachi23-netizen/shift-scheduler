@@ -950,10 +950,31 @@ export default function ManagerDashboardPage() {
           : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
       );
 
-      // Use all active employees; fall back to constraint submitters if employees list is empty
-      const allActiveEmployees = employees.length > 0
-        ? employees
-        : Array.from(employeesWithConstraints);
+      // If employees list is still empty, try re-fetching (race condition fix)
+      let allActiveEmployees = employees;
+      if (allActiveEmployees.length === 0) {
+        try {
+          const empRes = await fetch("/api/employees");
+          if (empRes.ok) {
+            const freshNames = (await empRes.json()) as string[];
+            if (freshNames.length > 0) {
+              allActiveEmployees = freshNames;
+              setEmployees(freshNames);
+            }
+          }
+        } catch { /* ignore */ }
+      }
+      // Last fallback: use employees who submitted constraints
+      if (allActiveEmployees.length === 0) {
+        allActiveEmployees = Array.from(employeesWithConstraints).sort((a, b) =>
+          a.localeCompare(b, "he")
+        );
+        if (allActiveEmployees.length > 0) setEmployees(allActiveEmployees);
+      }
+      if (allActiveEmployees.length === 0) {
+        setGenerateError("לא נמצאו עובדים במערכת. ודא שהעובדים נרשמו ושהרצת את ה-SQL migration.");
+        return;
+      }
 
       const result = generateSchedule(
         buildShiftSlots(startDate, endDate),
