@@ -946,7 +946,7 @@ export default function ManagerDashboardPage() {
       const uniqueEmployees = employeesWithConstraints.size;
       setConstraintInfo(
         constraints.length === 0
-          ? `לא נמצאו אילוצים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
+          ? `לא נמצאו אילוצים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)} — כל העובדים פנויים`
           : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
       );
 
@@ -990,7 +990,9 @@ export default function ManagerDashboardPage() {
       const emptySlots = 28 - filledSlots;
       setGenerateSummary(
         emptySlots === 0
-          ? `הסידור מלא — ${filledSlots} שיבוצים`
+          ? `הסידור מלא — ${filledSlots} שיבוצים מ-${allActiveEmployees.length} עובדים`
+          : filledSlots === 0
+          ? `⚠ לא שובץ אף עובד — יש ${allActiveEmployees.length} עובדים במערכת ו-${constraints.length} אילוצים לשבוע זה`
           : `${filledSlots} שיבוצים הוכנסו אוטומטית · ${emptySlots} חסרים להשלמה ידנית`
       );
       void totalSlots;
@@ -1583,12 +1585,41 @@ export default function ManagerDashboardPage() {
         {activeTab === "schedule" && (<>
         {/* Actions */}
         <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
-          <div>
-            <h2 className="text-xl font-semibold text-gray-700">פעולות</h2>
-            <p className="text-xs text-gray-400 mt-0.5">
-              רצף מומלץ: <span className="font-medium text-blue-700">① צור</span> → <span className="font-medium text-yellow-700">② ערוך</span> → <span className="font-medium text-purple-700">③ שמור</span> → <span className="font-medium text-emerald-700">④ פרסם</span>
-            </p>
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-700">פעולות</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                רצף מומלץ: <span className="font-medium text-blue-700">① צור</span> → <span className="font-medium text-yellow-700">② ערוך</span> → <span className="font-medium text-purple-700">③ שמור</span> → <span className="font-medium text-emerald-700">④ פרסם</span>
+              </p>
+            </div>
+            {/* Employee count badge */}
+            <div className="flex items-center gap-2">
+              <span className={`text-xs font-medium px-3 py-1.5 rounded-full border ${
+                employees.length > 0
+                  ? "bg-green-50 text-green-700 border-green-200"
+                  : "bg-red-50 text-red-700 border-red-200"
+              }`}>
+                {employees.length > 0 ? `✓ ${employees.length} עובדים טעונים` : "⚠ אין עובדים טעונים"}
+              </span>
+              <button
+                onClick={() => {
+                  fetch("/api/employees")
+                    .then((r) => r.ok ? r.json() : [])
+                    .then((names: string[]) => setEmployees(names))
+                    .catch(() => undefined);
+                }}
+                className="text-xs text-gray-500 hover:text-blue-600 border border-gray-200 hover:border-blue-300 rounded-lg px-2 py-1 transition-colors"
+              >
+                טען מחדש
+              </button>
+            </div>
           </div>
+          {employees.length === 0 && (
+            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+              <p className="font-semibold">לא נמצאו עובדים — הסידור לא יוכל להיווצר אוטומטית.</p>
+              <p className="mt-1">ודאי שהעובדים נרשמו למערכת ושהרצת את ה-SQL migration ב-Supabase.</p>
+            </div>
+          )}
           {generateError && (
             <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
               {generateError}
