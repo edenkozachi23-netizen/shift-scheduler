@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -1143,6 +1143,34 @@ export default function ManagerDashboardPage() {
    */
   const canExport = schedule !== null && scheduleValidation !== null;
 
+  // Current-period stats — always computed from the live schedule (no DB needed).
+  // Rows = employees, sub-columns = weekly breakdown within the monthly period.
+  const currentPeriodStats = useMemo<ExportPeriodStats | null>(() => {
+    if (!schedule || !scheduleStartDate) return null;
+    const entries: ScheduleEntry[] = [];
+    schedule.forEach((day, i) => {
+      const date = offsetDate(scheduleStartDate, i);
+      for (const period of ["morning", "evening"] as const) {
+        const assignments: Assignment[] = day[period]
+          .filter((v): v is Exclude<SlotValue, ""> => v !== "")
+          .map((v) => {
+            const tpl = SHIFT_TEMPLATE_MAP[v.templateId];
+            return {
+              employeeId:      v.employee,
+              shiftTemplateId: v.templateId,
+              shiftLabelHe:    tpl?.shiftLabelHe ?? v.templateId,
+              startTime:       tpl?.startTime ?? "",
+              endTime:         tpl?.endTime ?? "",
+              shortenedStart:  v.shortenedStart,
+            };
+          });
+        if (assignments.length > 0) entries.push({ date, period, assignments });
+      }
+    });
+    const label = `${formatDateShort(scheduleStartDate)} – ${formatDateShort(scheduleEndDate ?? offsetDate(scheduleStartDate, schedule.length - 1))}`;
+    return buildPeriodStats(label, entries, "week", employees);
+  }, [schedule, scheduleStartDate, scheduleEndDate, employees]);
+
   function handleExport() {
     if (!schedule || !scheduleStartDate || !employeeStats || !scheduleValidation) return;
     setExporting(true);
@@ -2128,104 +2156,137 @@ export default function ManagerDashboardPage() {
           </section>
         )}
 
-        {/* Historical Statistics */}
-        {schedule && (
-          <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-700">נתונים היסטוריים</h2>
-                <p className="text-xs text-gray-400 mt-0.5">מבוסס על סידורים ששמרת — לחץ על "שמור סידור" בתום כל שבוע</p>
-              </div>
-              <button
-                onClick={loadHistoricalStats}
-                disabled={histLoading}
-                className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
-              >
-                {histLoading ? "טוען..." : "רענן נתונים"}
-              </button>
-            </div>
-
-            {histError && (
-              <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                שגיאה: {histError}
-              </p>
-            )}
-
-            {[
-              { data: monthlyData,   accent: "purple", title: "חודשי" },
-              { data: quarterlyData, accent: "indigo", title: "רבעוני" },
-              { data: yearlyData,    accent: "slate",  title: "שנתי"   },
-            ].map(({ data, accent, title }) =>
-              data && data.rows.length > 0 ? (
-                <div key={title} className="space-y-2">
-                  <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
-                    {title} — {data.label}
-                  </h3>
-                  <p className="text-xs text-gray-400 mb-1">
-                    עמודות התת-תקופות (שבועות / חודשים) מציגות מספר משמרות. עמד מעל כותרת עמודה לקבלת הסבר מלא.
-                  </p>
-                  <div className="overflow-x-auto rounded-xl border border-gray-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className={`bg-${accent}-700 text-white text-xs`}>
-                          <th className="text-right px-4 py-2.5 font-semibold whitespace-nowrap">עובד</th>
-                          {data.subLabels.map((lbl) => (
-                            <th key={lbl} title="מספר משמרות בתת-תקופה זו" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">{lbl}</th>
-                          ))}
-                          <th title="סך כל המשמרות בתקופה" className="text-center px-3 py-2.5 font-semibold cursor-help">סה״כ</th>
-                          <th title="מספר משמרות בוקר (07:00–19:00 או 08:00–20:00)" className="text-center px-3 py-2.5 font-semibold cursor-help">בוקר</th>
-                          <th title="מספר משמרות ערב (19:00–07:00 או 20:00–08:00)" className="text-center px-3 py-2.5 font-semibold cursor-help">ערב</th>
-                          <th title="מספר משמרות בימי שישי" className="text-center px-3 py-2.5 font-semibold cursor-help">שישי</th>
-                          <th title="מספר משמרות בימי שבת" className="text-center px-3 py-2.5 font-semibold cursor-help">שבת</th>
-                          <th title="ממוצע משמרות לשבוע בתקופה זו" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">ממוצע/שבוע</th>
-                          <th title="רמת עומס: עמוס = 5+ משמרות | תקין = 3–4 | קל = 0–2" className="text-center px-3 py-2.5 font-semibold cursor-help">עומס</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.rows.map((s, idx) => {
-                          const maxSub = Math.max(...s.subCounts, 0);
-                          const avg = data.avgDivisor > 0 ? (s.total / data.avgDivisor).toFixed(1) : "—";
-                          return (
-                            <tr key={s.name} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"} hover:bg-${accent}-50 transition-colors`}>
-                              <td className="px-4 py-2.5 font-medium text-gray-800 whitespace-nowrap">{s.name}</td>
-                              {s.subCounts.map((n, ci) => (
-                                <td key={ci} className={`px-3 py-2.5 text-center tabular-nums font-medium ${n === maxSub && n > 0 ? "text-blue-700" : "text-gray-500"}`}>{n}</td>
-                              ))}
-                              <td className="px-3 py-2.5 text-center font-bold tabular-nums text-gray-800">{s.total}</td>
-                              <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.morning}</td>
-                              <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.evening}</td>
-                              <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.friday}</td>
-                              <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.saturday}</td>
-                              <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{avg}</td>
-                              <td className="px-3 py-2.5 text-center">
-                                <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
-                                  s.loadLevel === "עמוס" ? "bg-red-100 text-red-700 border-red-200" :
-                                  s.loadLevel === "תקין" ? "bg-blue-100 text-blue-700 border-blue-200" :
-                                  "bg-green-100 text-green-700 border-green-200"
-                                }`}>{s.loadLevel}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="flex gap-4 mt-2 text-xs text-gray-400">
-                    <span><span className="inline-block w-2 h-2 rounded-full bg-red-400 mr-1" />עמוס — 5+ משמרות בשבוע</span>
-                    <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1" />תקין — 3–4 משמרות בשבוע</span>
-                    <span><span className="inline-block w-2 h-2 rounded-full bg-green-400 mr-1" />קל — 0–2 משמרות בשבוע</span>
-                  </div>
+        {/* Shift counts per employee — monthly / quarterly / yearly */}
+        {(currentPeriodStats || monthlyData || quarterlyData || yearlyData || schedule) && (() => {
+          const StatsTable = ({ data, accent, headBg }: {
+            data: ExportPeriodStats;
+            accent: string;
+            headBg: string;
+          }) => {
+            const maxSubs = data.rows.map((r) => Math.max(...r.subCounts, 0));
+            return (
+              <div className="space-y-1">
+                <div className="overflow-x-auto rounded-xl border border-gray-200">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className={`${headBg} text-white text-xs`}>
+                        <th className="text-right px-4 py-2.5 font-semibold whitespace-nowrap sticky right-0 z-10" style={{background:"inherit"}}>עובד</th>
+                        {data.subLabels.map((lbl) => (
+                          <th key={lbl} title="מספר משמרות בתת-תקופה זו" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">{lbl}</th>
+                        ))}
+                        <th title="סך כל המשמרות" className="text-center px-3 py-2.5 font-semibold border-r border-white/30 cursor-help">סה״כ</th>
+                        <th title="משמרות בוקר" className="text-center px-3 py-2.5 font-semibold cursor-help">בוקר</th>
+                        <th title="משמרות ערב" className="text-center px-3 py-2.5 font-semibold cursor-help">ערב</th>
+                        <th title="משמרות שישי" className="text-center px-3 py-2.5 font-semibold cursor-help">שישי</th>
+                        <th title="משמרות שבת" className="text-center px-3 py-2.5 font-semibold cursor-help">שבת</th>
+                        <th title="ממוצע משמרות לשבוע" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">ממוצע/שבוע</th>
+                        <th title="עמוס=5+ | תקין=3–4 | קל=0–2" className="text-center px-3 py-2.5 font-semibold cursor-help">עומס</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.rows.map((s, idx) => {
+                        const avg = data.avgDivisor > 0 ? (s.total / data.avgDivisor).toFixed(1) : "—";
+                        return (
+                          <tr key={s.name} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"} hover:bg-${accent}-50 transition-colors`}>
+                            <td className="px-4 py-2.5 font-semibold text-gray-800 whitespace-nowrap">{s.name}</td>
+                            {s.subCounts.map((n, ci) => (
+                              <td key={ci} className={`px-3 py-2.5 text-center tabular-nums font-medium ${n === maxSubs[idx] && n > 0 ? `text-${accent}-700 font-bold` : "text-gray-500"}`}>{n || "—"}</td>
+                            ))}
+                            <td className="px-3 py-2.5 text-center font-bold tabular-nums text-gray-900 border-r border-gray-100">{s.total}</td>
+                            <td className="px-3 py-2.5 text-center tabular-nums text-sky-700 font-medium">{s.morning}</td>
+                            <td className="px-3 py-2.5 text-center tabular-nums text-indigo-700 font-medium">{s.evening}</td>
+                            <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.friday || "—"}</td>
+                            <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{s.saturday || "—"}</td>
+                            <td className="px-3 py-2.5 text-center tabular-nums text-gray-500">{avg}</td>
+                            <td className="px-3 py-2.5 text-center">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
+                                s.loadLevel === "עמוס" ? "bg-red-100 text-red-700 border-red-200" :
+                                s.loadLevel === "תקין" ? "bg-blue-100 text-blue-700 border-blue-200" :
+                                "bg-green-100 text-green-700 border-green-200"
+                              }`}>{s.loadLevel}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              ) : null
-            )}
+                <div className="flex gap-4 mt-1 text-xs text-gray-400">
+                  <span><span className="inline-block w-2 h-2 rounded-full bg-red-400 mr-1"/>עמוס — 5+ משמרות</span>
+                  <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1"/>תקין — 3–4 משמרות</span>
+                  <span><span className="inline-block w-2 h-2 rounded-full bg-green-400 mr-1"/>קל — 0–2 משמרות</span>
+                  <span className="mr-auto text-sky-600">בוקר</span>
+                  <span className="text-indigo-600">ערב</span>
+                </div>
+              </div>
+            );
+          };
 
-            {!histLoading && !histError && !monthlyData && !quarterlyData && !yearlyData && (
-              <p className="text-sm text-gray-400">
-                אין נתונים שמורים עדיין. לחץ "שמור סידור" בתום כל שבוע כדי לצבור היסטוריה.
-              </p>
-            )}
-          </section>
-        )}
+          const activeMonthly = currentPeriodStats ?? monthlyData;
+
+          return (
+            <section className="bg-white rounded-2xl shadow-md p-6 space-y-6">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <h2 className="text-xl font-semibold text-gray-700">משמרות לפי עובד</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    חודשי מחושב מהסידור הנוכחי · רבעוני ושנתי מחייבים שמירת סידורים קודמים
+                  </p>
+                </div>
+                <button
+                  onClick={loadHistoricalStats}
+                  disabled={histLoading}
+                  className="px-4 py-1.5 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-300 rounded-lg transition-colors"
+                >
+                  {histLoading ? "טוען..." : "טען רבעוני / שנתי"}
+                </button>
+              </div>
+
+              {histError && (
+                <p className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">שגיאה: {histError}</p>
+              )}
+
+              {/* Monthly — always present */}
+              {activeMonthly && activeMonthly.rows.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded">חודשי</span>
+                    <span className="text-sm text-gray-500">{activeMonthly.label} — פירוט לפי שבועות</span>
+                  </div>
+                  <StatsTable data={activeMonthly} accent="purple" headBg="bg-purple-700" />
+                </div>
+              )}
+
+              {/* Quarterly — loaded from history */}
+              {quarterlyData && quarterlyData.rows.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">רבעוני</span>
+                    <span className="text-sm text-gray-500">{quarterlyData.label} — פירוט לפי חודשים</span>
+                  </div>
+                  <StatsTable data={quarterlyData} accent="indigo" headBg="bg-indigo-700" />
+                </div>
+              )}
+
+              {/* Yearly — loaded from history */}
+              {yearlyData && yearlyData.rows.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">שנתי</span>
+                    <span className="text-sm text-gray-500">{yearlyData.label} — פירוט לפי חודשים</span>
+                  </div>
+                  <StatsTable data={yearlyData} accent="slate" headBg="bg-slate-700" />
+                </div>
+              )}
+
+              {!quarterlyData && !yearlyData && !histLoading && (
+                <p className="text-xs text-gray-400">
+                  לחץ "טען רבעוני / שנתי" לצפייה בנתונים היסטוריים (מחייב שמירת סידורים קודמים).
+                </p>
+              )}
+            </section>
+          );
+        })()}
 
         {/* Shift Types from Supabase */}
         <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
