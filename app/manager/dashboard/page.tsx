@@ -1973,12 +1973,18 @@ export default function ManagerDashboardPage() {
         {/* Monthly Schedule — 4 weekly tabs */}
         {schedule && scheduleStartDate && (() => {
           const totalDays = schedule.length;
-          const weekChunks = [
-            { start: 0,  end: Math.min(7,  totalDays) },
-            { start: 7,  end: Math.min(14, totalDays) },
-            { start: 14, end: Math.min(21, totalDays) },
-            { start: 21, end: totalDays },
-          ].filter((c) => c.start < totalDays);
+          // Split by real Sun–Sat weeks: a new chunk starts every Sunday
+          const weekChunks: { start: number; end: number }[] = [];
+          let chunkStart = 0;
+          for (let i = 1; i < totalDays; i++) {
+            const d = offsetDate(scheduleStartDate, i);
+            const [dy, dm, dd] = d.split("-").map(Number);
+            if (new Date(dy, dm - 1, dd).getDay() === 0) { // Sunday
+              weekChunks.push({ start: chunkStart, end: i });
+              chunkStart = i;
+            }
+          }
+          weekChunks.push({ start: chunkStart, end: totalDays });
 
           const safeTab = Math.min(activeWeekTab, weekChunks.length - 1);
           const { start: tabStart, end: tabEnd } = weekChunks[safeTab];
