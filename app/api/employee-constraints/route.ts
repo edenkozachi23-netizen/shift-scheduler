@@ -1,21 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-function dbHeaders(extra?: Record<string, string>) {
+function anonHeaders(extra?: Record<string, string>) {
   return {
-    apikey: SUPABASE_KEY!,
+    apikey: SUPABASE_KEY,
     Authorization: `Bearer ${SUPABASE_KEY}`,
     "Content-Type": "application/json",
     Accept: "application/json",
     ...extra,
   };
-}
-
-function missingEnv() {
-  return NextResponse.json({ error: "Missing Supabase env vars" }, { status: 500 });
 }
 
 async function getUser() {
@@ -26,15 +23,13 @@ async function getUser() {
 
 // GET /api/employee-constraints
 //
+// Manager (?from=YYYY-MM-DD&to=YYYY-MM-DD):
+//   Returns ALL employees' constraints in the date range using service role key
+//   so it bypasses RLS and always returns the full dataset.
+//
 // Employee (no params):
 //   Returns the logged-in employee's own constraints.
-//
-// Manager (?from=YYYY-MM-DD&to=YYYY-MM-DD):
-//   Returns ALL employees' constraints in the date range.
-//   Used by the manager dashboard before calling generateSchedule.
 export async function GET(request: Request) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return missingEnv();
-
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
@@ -43,36 +38,43 @@ export async function GET(request: Request) {
   const to   = searchParams.get("to");
   const role = user.user_metadata?.role as string | undefined;
 
-  let supabaseUrl: string;
-
   if (role === "manager" && from && to) {
-    // Manager: all constraints in the given date range, including employee_id
-    supabaseUrl =
+    // Use service role key to bypass RLS — managers can see all constraints
+    const key = SERVICE_KEY ?? SUPABASE_KEY;
+    const res = await fetch(
       `${SUPABASE_URL}/rest/v1/employee_constraints` +
-      `?date_iso=gte.${from}&date_iso=lte.${to}` +
-      `&select=id,employee_id,date_iso,constraint_type,note` +
-      `&order=date_iso.asc`;
-  } else {
-    // Employee: only their own constraints
-    const employeeId = user.user_metadata?.display_name as string | undefined;
-    if (!employeeId) {
-      return NextResponse.json({ error: "Profile has no display_name" }, { status: 400 });
-    }
-    supabaseUrl =
-      `${SUPABASE_URL}/rest/v1/employee_constraints` +
+        `?date_iso=gte.${from}&date_iso=lte.${to}` +
+        `&select=id,employee_id,date_iso,constraint_type,note` +
+        `&order=date_iso.asc`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: "application/json",
+        },
+        cache: "no-store",
+      }
+    );
+    const body = await res.text();
+    if (!res.ok) return NextResponse.json({ error: `Supabase ${res.status}: ${body}` }, { status: res.status });
+    return NextResponse.json(JSON.parse(body));
+  }
+
+  // Employee: only their own constraints via anon key (table allows anon reads)
+  const employeeId = user.user_metadata?.display_name as string | undefined;
+  if (!employeeId) {
+    return NextResponse.json({ error: "Profile has no display_name" }, { status: 400 });
+  }
+
+  const res = await fetch(
+    `${SUPABASE_URL}/rest/v1/employee_constraints` +
       `?employee_id=eq.${encodeURIComponent(employeeId)}` +
       `&select=id,date_iso,constraint_type,note` +
-      `&order=date_iso.asc`;
-  }
-
-  const res = await fetch(supabaseUrl, { headers: dbHeaders(), cache: "no-store" });
+      `&order=date_iso.asc`,
+    { headers: anonHeaders(), cache: "no-store" }
+  );
   const body = await res.text();
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: `Supabase error ${res.status}: ${body}` },
-      { status: res.status }
-    );
-  }
+  if (!res.ok) return NextResponse.json({ error: `Supabase ${res.status}: ${body}` }, { status: res.status });
   return NextResponse.json(JSON.parse(body));
 }
 
@@ -80,8 +82,6 @@ export async function GET(request: Request) {
 // Body: { dateISO, constraintType, note }
 // The employeeId is derived from the session — not accepted from the body.
 export async function POST(request: Request) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return missingEnv();
-
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
@@ -94,7 +94,7 @@ export async function POST(request: Request) {
 
   const res = await fetch(`${SUPABASE_URL}/rest/v1/employee_constraints`, {
     method: "POST",
-    headers: dbHeaders({ Prefer: "return=representation" }),
+    headers: anonHeaders({ Prefer: "return=representation" }),
     body: JSON.stringify({
       employee_id:     employeeId,
       employee_name:   employeeId,
@@ -105,20 +105,13 @@ export async function POST(request: Request) {
   });
 
   const body = await res.text();
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: `Supabase error ${res.status}: ${body}` },
-      { status: res.status }
-    );
-  }
+  if (!res.ok) return NextResponse.json({ error: `Supabase ${res.status}: ${body}` }, { status: res.status });
   return NextResponse.json(JSON.parse(body));
 }
 
 // DELETE /api/employee-constraints?id=xxx
 // Only deletes the record if it belongs to the currently authenticated employee.
 export async function DELETE(request: Request) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return missingEnv();
-
   const user = await getUser();
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
@@ -129,39 +122,26 @@ export async function DELETE(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
-  if (!id) {
-    return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  }
+  if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-  // Ownership check — only delete if the row belongs to this employee.
+  // Ownership check
   const checkRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/employee_constraints` +
-      `?id=eq.${encodeURIComponent(id)}` +
-      `&select=employee_id`,
-    { headers: dbHeaders(), cache: "no-store" }
+    `${SUPABASE_URL}/rest/v1/employee_constraints?id=eq.${encodeURIComponent(id)}&select=employee_id`,
+    { headers: anonHeaders(), cache: "no-store" }
   );
-  if (!checkRes.ok) {
-    return NextResponse.json({ error: "Failed to verify ownership" }, { status: 500 });
-  }
-  const rows = await checkRes.json() as { employee_id: string }[];
-  if (rows.length === 0) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-  if (rows[0].employee_id !== employeeId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  if (!checkRes.ok) return NextResponse.json({ error: "Failed to verify ownership" }, { status: 500 });
+  const rows = (await checkRes.json()) as { employee_id: string }[];
+  if (rows.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (rows[0].employee_id !== employeeId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/employee_constraints?id=eq.${encodeURIComponent(id)}`,
-    { method: "DELETE", headers: dbHeaders() }
+    { method: "DELETE", headers: anonHeaders() }
   );
 
   if (!res.ok) {
     const body = await res.text();
-    return NextResponse.json(
-      { error: `Supabase error ${res.status}: ${body}` },
-      { status: res.status }
-    );
+    return NextResponse.json({ error: `Supabase ${res.status}: ${body}` }, { status: res.status });
   }
   return new NextResponse(null, { status: 204 });
 }

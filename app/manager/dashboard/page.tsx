@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { generateSchedule, buildShiftSlots } from "@/lib/scheduling/generateSchedule";
@@ -49,17 +50,37 @@ function offsetDate(start: string, days: number): string {
   return `${result.getFullYear()}-${String(result.getMonth() + 1).padStart(2, "0")}-${String(result.getDate()).padStart(2, "0")}`;
 }
 
-function getUpcomingWeekStart(): string {
-  const today = new Date();
-  const dow = today.getDay();
-  const daysUntilSunday = dow === 0 ? 7 : 7 - dow;
-  const sunday = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysUntilSunday);
-  return `${sunday.getFullYear()}-${String(sunday.getMonth() + 1).padStart(2, "0")}-${String(sunday.getDate()).padStart(2, "0")}`;
-}
 
 function formatDateShort(dateStr: string): string {
   const [, month, day] = dateStr.split("-");
   return `${parseInt(day)}/${parseInt(month)}`;
+}
+
+/** Returns the scheduling period (20th of previous/current month → 19th of current/next month).
+ *  Mirrors the employee dashboard logic: if today >= 20, the active schedule period is
+ *  20th this month → 19th next month. Otherwise it's 20th last month → 19th this month. */
+function getSchedulingPeriod(): { start: string; end: string } {
+  const today = new Date();
+  const year  = today.getFullYear();
+  const month = today.getMonth() + 1; // 1-based
+  const day   = today.getDate();
+  if (day >= 20) {
+    // Active schedule: 20th this month → 19th next month
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear  = month === 12 ? year + 1 : year;
+    return {
+      start: `${year}-${String(month).padStart(2, "0")}-20`,
+      end:   `${nextYear}-${String(nextMonth).padStart(2, "0")}-19`,
+    };
+  } else {
+    // Active schedule: 20th last month → 19th this month
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear  = month === 1 ? year - 1 : year;
+    return {
+      start: `${prevYear}-${String(prevMonth).padStart(2, "0")}-20`,
+      end:   `${year}-${String(month).padStart(2, "0")}-19`,
+    };
+  }
 }
 
 // ─── Engine ↔ UI schedule conversion ─────────────────────────────────────────
@@ -73,8 +94,17 @@ function engineEntryToShift(entry: ScheduleEntry | undefined): Shift {
   ];
 }
 
-function engineToUISchedule(entries: ScheduleEntry[], startDate: string): Schedule {
-  return Array.from({ length: 7 }, (_, i) => {
+function dateDiffDays(start: string, end: string): number {
+  const [sy, sm, sd] = start.split("-").map(Number);
+  const [ey, em, ed] = end.split("-").map(Number);
+  const s = new Date(sy, sm - 1, sd);
+  const e = new Date(ey, em - 1, ed);
+  return Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function engineToUISchedule(entries: ScheduleEntry[], startDate: string, endDate?: string): Schedule {
+  const days = endDate ? dateDiffDays(startDate, endDate) + 1 : 7;
+  return Array.from({ length: days }, (_, i) => {
     const date = offsetDate(startDate, i);
     return {
       morning: engineEntryToShift(entries.find((e) => e.date === date && e.period === "morning")),
@@ -199,7 +229,9 @@ function getMissingList(
   const items: MissingItem[] = [];
   schedule.forEach((day, i) => {
     const date  = offsetDate(startDate, i);
-    const label = `${DAYS[i]} ${formatDateShort(date)}`;
+    const [dy, dm, dd] = date.split("-").map(Number);
+    const dow   = new Date(dy, dm - 1, dd).getDay();
+    const label = `${DAYS[dow]} ${formatDateShort(date)}`;
     const mFilled = day.morning.filter(slotFilled).length;
     const eFilled = day.evening.filter(slotFilled).length;
     if (mFilled < 2) {
@@ -798,8 +830,8 @@ type Profile = {
 export default function ManagerDashboardPage() {
   const router = useRouter();
 
-  // ── Employees (loaded from DB) ────────────────────────────────────────────
-  const [employees, setEmployees] = useState<string[]>([]);
+  // ── Employees (loaded from DB, seeded from static list) ──────────────────
+  const [employees, setEmployees] = useState<string[]>(ALL_EMPLOYEES);
 
   // ── Tab navigation ────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<"schedule" | "employees" | "shifts">("schedule");
@@ -848,15 +880,7 @@ export default function ManagerDashboardPage() {
         fetch("/api/employees")
           .then((r) => r.ok ? r.json() : [])
           .then((names: string[]) => {
-            if (names.length > 0) { setEmployees(names); return; }
-            // Fallback: get all unique employee names from the constraints table
-            return fetch("/api/employee-constraints")
-              .then((r) => r.ok ? r.json() : [])
-              .then((rows: { employee_id?: string; id?: string }[]) => {
-                const all = Array.from(new Set(rows.map((r) => r.employee_id).filter(Boolean) as string[]))
-                  .sort((a, b) => a.localeCompare(b, "he"));
-                if (all.length > 0) setEmployees(all);
-              });
+            if (names.length > 0) setEmployees(names);
           })
           .catch(() => undefined);
       })
@@ -873,6 +897,7 @@ export default function ManagerDashboardPage() {
 
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [scheduleStartDate, setScheduleStartDate] = useState<string | null>(null);
+  const [scheduleEndDate, setScheduleEndDate] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [shiftTypes, setShiftTypes] = useState<ShiftType[]>([]);
   const [shiftTypesError, setShiftTypesError] = useState<string | null>(null);
@@ -880,12 +905,11 @@ export default function ManagerDashboardPage() {
   const [exporting, setExporting] = useState(false);
 
   // ── Historical / aggregated stats ─────────────────────────────────────────
-  const [generating, setGenerating]         = useState(false);
-  const [generateError, setGenerateError]   = useState<string | null>(null);
-  const [constraintInfo, setConstraintInfo] = useState<string | null>(null);
+  const [generating, setGenerating]           = useState(false);
+  const [generateError, setGenerateError]     = useState<string | null>(null);
+  const [generateWarning, setGenerateWarning] = useState<string | null>(null);
+  const [constraintInfo, setConstraintInfo]   = useState<string | null>(null);
   const [missingConstraints, setMissingConstraints] = useState<string[]>([]);
-  const [autoGenerating, setAutoGenerating] = useState(false);
-  const [autoGenerateResult, setAutoGenerateResult] = useState<string | null>(null);
   const [generateSummary, setGenerateSummary] = useState<string | null>(null);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [loadSavedError, setLoadSavedError] = useState<string | null>(null);
@@ -923,93 +947,107 @@ export default function ManagerDashboardPage() {
   };
 
   async function generateNewSchedule() {
-    const startDate = getUpcomingWeekStart();
-    const endDate   = offsetDate(startDate, 6);
+    console.log("[GEN] generate button clicked");
+    const { start: startDate, end: endDate } = getSchedulingPeriod();
+    console.log("[GEN] startDate:", startDate, "endDate:", endDate);
 
-    setGenerating(true);
     setGenerateError(null);
+    setGenerateWarning(null);
     setConstraintInfo(null);
     setMissingConstraints([]);
-    try {
-      const res = await fetch(
-        `/api/employee-constraints?from=${startDate}&to=${endDate}`
-      );
-      const json = await res.json();
-      if (!res.ok) {
-        setGenerateError(
-          `לא ניתן לטעון אילוצי עובדים — ${json.error ?? `HTTP ${res.status}`}. הסידור לא נוצר.`
-        );
-        return;
-      }
+    setGenerateSummary(null);
 
-      const constraints: Constraint[] = (json as ConstraintRow[]).map((r) => ({
-        employee:       r.employee_id,
-        date:           r.date_iso,
-        constraintType: r.constraint_type as ConstraintType,
-        note:           r.note,
-      }));
+    // ── PHASE 1: Show empty editable grid IMMEDIATELY (no network wait) ──────
+    // flushSync forces React to commit these state updates to the DOM before
+    // any async work begins — bypasses React 18 automatic batching.
+    const baseEmployees = employees.length > 0 ? [...employees] : [...ALL_EMPLOYEES];
+    const totalDays = dateDiffDays(startDate, endDate) + 1;
+    console.log("[GEN] totalDays:", totalDays, "baseEmployees:", baseEmployees);
+    const emptyGrid: Schedule = Array.from({ length: totalDays }, () => ({
+      morning: ["", ""] as Shift,
+      evening: ["", ""] as Shift,
+    }));
+    console.log("[GEN] empty grid created, length:", emptyGrid.length);
 
-      const employeesWithConstraints = new Set(constraints.map((c) => c.employee));
-      const noConstraints = employees.filter((e) => !employeesWithConstraints.has(e));
-      setMissingConstraints(noConstraints);
-
-      const uniqueEmployees = employeesWithConstraints.size;
-      setConstraintInfo(
-        constraints.length === 0
-          ? `לא נמצאו אילוצים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)} — כל העובדים פנויים`
-          : `נטענו ${constraints.length} אילוצים מ-${uniqueEmployees} עובדים לשבוע ${formatDateShort(startDate)}–${formatDateShort(endDate)}`
-      );
-
-      // If employees list is still empty, try re-fetching (race condition fix)
-      let allActiveEmployees = employees;
-      if (allActiveEmployees.length === 0) {
-        try {
-          const empRes = await fetch("/api/employees");
-          if (empRes.ok) {
-            const freshNames = (await empRes.json()) as string[];
-            if (freshNames.length > 0) {
-              allActiveEmployees = freshNames;
-              setEmployees(freshNames);
-            }
-          }
-        } catch { /* ignore */ }
-      }
-      // Last fallback: use employees who submitted constraints
-      if (allActiveEmployees.length === 0) {
-        allActiveEmployees = Array.from(employeesWithConstraints).sort((a, b) =>
-          a.localeCompare(b, "he")
-        );
-        if (allActiveEmployees.length > 0) setEmployees(allActiveEmployees);
-      }
-      if (allActiveEmployees.length === 0) {
-        setGenerateError("לא נמצאו עובדים במערכת. ודא שהעובדים נרשמו ושהרצת את ה-SQL migration.");
-        return;
-      }
-
-      const result = generateSchedule(
-        buildShiftSlots(startDate, endDate),
-        allActiveEmployees,
-        constraints
-      );
-      setSchedule(engineToUISchedule(result.schedule, startDate));
+    flushSync(() => {
+      setEmployees(baseEmployees);
+      setSchedule(emptyGrid);
       setScheduleStartDate(startDate);
+      setScheduleEndDate(endDate);
       setEditMode(true);
       setIsDirty(false);
-      const totalSlots = 14; // 7 days × 2 periods × 2 employees = 28, but we count shifts (14 shift-slots of 2 each)
+    });
+    console.log("[GEN] Phase 1 flushed — grid should be visible now");
+
+    // ── PHASE 2: Fetch constraints and auto-fill in the background ───────────
+    setGenerating(true);
+    try {
+      // Resolve fresh employee list
+      let allActiveEmployees = baseEmployees;
+      try {
+        const empRes = await fetch("/api/employees");
+        if (empRes.ok) {
+          const freshNames = (await empRes.json()) as string[];
+          console.log("[GEN] employees loaded:", freshNames);
+          if (freshNames.length > 0) {
+            allActiveEmployees = freshNames;
+            setEmployees(freshNames);
+          }
+        }
+      } catch { /* keep baseEmployees */ }
+
+      // Fetch constraints — non-fatal
+      let constraints: Constraint[] = [];
+      try {
+        const res = await fetch(`/api/employee-constraints?from=${startDate}&to=${endDate}`);
+        const json = await res.json();
+        if (res.ok) {
+          constraints = (json as ConstraintRow[]).map((r) => ({
+            employee:       r.employee_id,
+            date:           r.date_iso,
+            constraintType: r.constraint_type as ConstraintType,
+            note:           r.note,
+          }));
+          console.log("[GEN] constraints loaded:", constraints.length);
+        } else {
+          console.log("[GEN] constraints API error:", json);
+          setGenerateWarning("לא ניתן לטעון אילוצים — הסידור נוצר ללא אילוצים");
+        }
+      } catch (e) {
+        console.log("[GEN] constraints fetch threw:", e);
+        setGenerateWarning("שגיאת רשת — הסידור נוצר ללא אילוצים");
+      }
+
+      const employeesWithConstraints = new Set(constraints.map((c) => c.employee));
+      setMissingConstraints(allActiveEmployees.filter((e) => !employeesWithConstraints.has(e)));
+      setConstraintInfo(
+        constraints.length === 0
+          ? `לא נמצאו אילוצים לתקופה ${formatDateShort(startDate)}–${formatDateShort(endDate)} — כל העובדים פנויים`
+          : `נטענו ${constraints.length} אילוצים מ-${employeesWithConstraints.size} עובדים`
+      );
+
+      // Auto-generate assignments
+      console.log("[GEN] calling generateSchedule with", allActiveEmployees.length, "employees");
+      const result = generateSchedule(buildShiftSlots(startDate, endDate), allActiveEmployees, constraints);
       const filledSlots = result.schedule.reduce((sum, e) => sum + e.assignments.length, 0);
-      const emptySlots = 28 - filledSlots;
+      console.log("[GEN] generateSchedule result: filledSlots =", filledSlots, "entries =", result.schedule.length);
+
+      const uiSchedule = engineToUISchedule(result.schedule, startDate, endDate);
+      console.log("[GEN] mapped UI schedule length:", uiSchedule.length, "— calling setSchedule");
+      setSchedule(uiSchedule);
+      setIsDirty(false);
+      const emptySlots = totalDays * 4 - filledSlots;
       setGenerateSummary(
-        emptySlots === 0
-          ? `הסידור מלא — ${filledSlots} שיבוצים מ-${allActiveEmployees.length} עובדים`
-          : filledSlots === 0
-          ? `⚠ לא שובץ אף עובד — יש ${allActiveEmployees.length} עובדים במערכת ו-${constraints.length} אילוצים לשבוע זה`
-          : `${filledSlots} שיבוצים הוכנסו אוטומטית · ${emptySlots} חסרים להשלמה ידנית`
+        filledSlots === 0
+          ? `הסידור ריק — ניתן למלא ידנית (${totalDays} ימים, ${allActiveEmployees.length} עובדים)`
+          : emptySlots === 0
+          ? `הסידור מלא — ${filledSlots} שיבוצים (${totalDays} ימים)`
+          : `${filledSlots} שיבוצים אוטומטיים · ${emptySlots} חסרים להשלמה ידנית`
       );
-      void totalSlots;
+      console.log("[GEN] done ✓");
     } catch (err) {
-      setGenerateError(
-        err instanceof Error ? err.message : "שגיאה בלתי צפויה — הסידור לא נוצר"
-      );
+      console.error("[GEN] caught error:", err);
+      setGenerateWarning(err instanceof Error ? err.message : "שגיאה בייצור אוטומטי — ניתן למלא ידנית");
     } finally {
       setGenerating(false);
     }
@@ -1020,15 +1058,15 @@ export default function ManagerDashboardPage() {
     setLoadingSaved(true);
     setLoadSavedError(null);
     try {
-      const weekStart = getUpcomingWeekStart();
-      const weekEnd   = offsetDate(weekStart, 6);
-      const res = await fetch(`/api/schedule-entries?from=${weekStart}&to=${weekEnd}`);
+      const { start: periodStart, end: periodEnd } = getSchedulingPeriod();
+      const res = await fetch(`/api/schedule-entries?from=${periodStart}&to=${periodEnd}`);
       const json = await res.json();
       if (!res.ok) { setLoadSavedError(json.error ?? `HTTP ${res.status}`); return; }
       const dbEntries = json as { date: string; period: string; employee_id: string; shift_template_id: string }[];
-      if (dbEntries.length === 0) { setLoadSavedError("לא נמצא סידור שמור לשבוע הקרוב"); return; }
-      const uiSched: Schedule = Array.from({ length: 7 }, (_, i) => {
-        const date = offsetDate(weekStart, i);
+      if (dbEntries.length === 0) { setLoadSavedError("לא נמצא סידור שמור לתקופה הנוכחית (20 לחודש – 19 לחודש הבא)"); return; }
+      const totalDays = dateDiffDays(periodStart, periodEnd) + 1;
+      const uiSched: Schedule = Array.from({ length: totalDays }, (_, i) => {
+        const date = offsetDate(periodStart, i);
         const dayEntries = dbEntries.filter((e) => e.date === date);
         const toSlots = (period: "morning" | "evening"): Shift => {
           const slots = dayEntries.filter((e) => e.period === period);
@@ -1040,58 +1078,13 @@ export default function ManagerDashboardPage() {
         return { morning: toSlots("morning"), evening: toSlots("evening") };
       });
       setSchedule(uiSched);
-      setScheduleStartDate(weekStart);
+      setScheduleStartDate(periodStart);
+      setScheduleEndDate(periodEnd);
       setEditMode(false);
       setGenerateSummary(null);
       setIsDirty(false);
     } finally {
       setLoadingSaved(false);
-    }
-  }
-
-  async function handleAutoGenerate() {
-    setAutoGenerating(true);
-    setAutoGenerateResult(null);
-    try {
-      const res = await fetch("/api/schedule/auto-generate", { method: "POST" });
-      const json = await res.json();
-      if (!res.ok) {
-        setAutoGenerateResult(`שגיאה: ${json.error ?? res.status}`);
-        return;
-      }
-      const weekStart = json.weekStart as string;
-      const weekEnd = json.weekEnd as string;
-      const entriesRes = await fetch(`/api/schedule-entries?from=${weekStart}&to=${weekEnd}`);
-      const dbEntries = await entriesRes.json() as {
-        date: string;
-        period: string;
-        employee_id: string;
-        shift_template_id: string;
-      }[];
-      const uiSched: Schedule = Array.from({ length: 7 }, (_, i) => {
-        const date = offsetDate(weekStart, i);
-        const dayEntries = dbEntries.filter((e) => e.date === date);
-        const toSlots = (period: "morning" | "evening"): Shift => {
-          const slots = dayEntries.filter((e) => e.period === period);
-          return [
-            slots[0] ? { employee: slots[0].employee_id, templateId: slots[0].shift_template_id } : "",
-            slots[1] ? { employee: slots[1].employee_id, templateId: slots[1].shift_template_id } : "",
-          ];
-        };
-        return { morning: toSlots("morning"), evening: toSlots("evening") };
-      });
-      setSchedule(uiSched);
-      setScheduleStartDate(weekStart);
-      setEditMode(false);
-      setLastSaved(new Date().toLocaleTimeString("he-IL"));
-      setAutoGenerateResult(
-        `סידור נוצר ונשמר אוטומטית — ${json.entriesSaved} שיבוצים לשבוע ${formatDateShort(weekStart)}–${formatDateShort(weekEnd)}`
-      );
-      await loadHistoricalStats();
-    } catch (err) {
-      setAutoGenerateResult(err instanceof Error ? err.message : "שגיאה");
-    } finally {
-      setAutoGenerating(false);
     }
   }
 
@@ -1113,8 +1106,6 @@ export default function ManagerDashboardPage() {
     setIsDirty(true);
   }
 
-  const upcomingWeekStart = getUpcomingWeekStart();
-
   // ── Derived values — recalculated on every schedule state change ───────────
   const entries = schedule && scheduleStartDate
     ? uiScheduleToEntries(schedule, scheduleStartDate)
@@ -1131,7 +1122,7 @@ export default function ManagerDashboardPage() {
         entries,
         employees,
         scheduleStartDate,
-        offsetDate(scheduleStartDate, 6)
+        scheduleEndDate ?? offsetDate(scheduleStartDate, schedule ? schedule.length - 1 : 6)
       )
     : null;
 
@@ -1152,7 +1143,7 @@ export default function ManagerDashboardPage() {
     if (!schedule || !scheduleStartDate || !employeeStats || !scheduleValidation) return;
     setExporting(true);
     try {
-      const periodLabel = `${formatDateShort(scheduleStartDate)} – ${formatDateShort(offsetDate(scheduleStartDate, 6))}`;
+      const periodLabel = `${formatDateShort(scheduleStartDate)} – ${formatDateShort(scheduleEndDate ?? offsetDate(scheduleStartDate, schedule.length - 1))}`;
 
       // Collect hard-violation slot keys for per-day status computation
       const hardSlots = new Set<string>(); // "date|period"
@@ -1174,6 +1165,8 @@ export default function ManagerDashboardPage() {
 
       const days: ExportDay[] = schedule.map((day, i) => {
         const date = offsetDate(scheduleStartDate, i);
+        const [edy, edm, edd] = date.split("-").map(Number);
+        const dow = new Date(edy, edm - 1, edd).getDay();
         const mFilled = day.morning.filter((v) => v !== "").length;
         const eFilled = day.evening.filter((v) => v !== "").length;
         let status: "תקין" | "חוסר" | "הפרה" = "תקין";
@@ -1183,7 +1176,7 @@ export default function ManagerDashboardPage() {
           status = "הפרה";
         }
         return {
-          dayName: DAYS[i],
+          dayName: DAYS[dow],
           date:    formatDateShort(date),
           morning: [toSlot(day.morning[0]), toSlot(day.morning[1])],
           evening: [toSlot(day.evening[0]), toSlot(day.evening[1])],
@@ -1246,8 +1239,10 @@ export default function ManagerDashboardPage() {
     setSaving(true);
     setSaveError(null);
     try {
+      const { end: periodEnd } = getSchedulingPeriod();
       const body = {
         weekStart: scheduleStartDate,
+        periodEnd,
         entries: entries
           .filter((e) => e.assignments.length > 0)
           .flatMap((e) =>
@@ -1357,7 +1352,7 @@ export default function ManagerDashboardPage() {
       setManagedUsers((prev) =>
         prev.map((u) => u.id === userId ? { ...u, is_active: !currentActive } : u)
       );
-      fetch("/api/employees").then((r) => r.ok ? r.json() : []).then(setEmployees).catch(() => undefined);
+      fetch("/api/employees").then((r) => r.ok ? r.json() : []).then((names: string[]) => { if (names.length > 0) setEmployees(names); }).catch(() => undefined);
     } finally {
       setTogglingUser(null);
     }
@@ -1478,8 +1473,7 @@ export default function ManagerDashboardPage() {
   }
 
   async function loadWeekConstraints() {
-    const wStart = getUpcomingWeekStart();
-    const wEnd   = offsetDate(wStart, 6);
+    const { start: wStart, end: wEnd } = getSchedulingPeriod();
     setWeekConstraintsLoading(true);
     setWeekConstraintsError(null);
     try {
@@ -1488,15 +1482,17 @@ export default function ManagerDashboardPage() {
       if (!res.ok) { setWeekConstraintsError(json.error ?? `HTTP ${res.status}`); return; }
       const rows = json as WeekConstraintRow[];
       setWeekConstraints(rows);
-      // Populate employees from constraints if the employee list is still empty
+      // Merge constraint submitters into employee list — always prefer DB names over static fallback
       if (rows.length > 0) {
         const names = Array.from(new Set(rows.map((r) => r.employee_id)))
           .filter(Boolean)
           .sort((a, b) => a.localeCompare(b, "he"));
         if (names.length > 0) {
           setEmployees((prev) => {
-            if (prev.length > 0) return prev;
-            return names;
+            // Merge: union of API names and constraint names, removing static-only placeholders
+            const merged = Array.from(new Set([...prev, ...names]))
+              .sort((a, b) => a.localeCompare(b, "he"));
+            return merged;
           });
         }
       }
@@ -1518,7 +1514,7 @@ export default function ManagerDashboardPage() {
     if (!profile) return;
     const id = setInterval(() => {
       fetch("/api/employees").then((r) => r.ok ? r.json() : null).then((names: string[] | null) => {
-        if (names) setEmployees(names);
+        if (names && names.length > 0) setEmployees(names);
       }).catch(() => undefined);
     }, 60_000);
     return () => clearInterval(id);
@@ -1628,7 +1624,7 @@ export default function ManagerDashboardPage() {
                 onClick={() => {
                   fetch("/api/employees")
                     .then((r) => r.ok ? r.json() : [])
-                    .then((names: string[]) => setEmployees(names))
+                    .then((names: string[]) => { if (names.length > 0) setEmployees(names); })
                     .catch(() => undefined);
                 }}
                 className="text-xs text-gray-500 hover:text-blue-600 border border-gray-200 hover:border-blue-300 rounded-lg px-2 py-1 transition-colors"
@@ -1648,6 +1644,11 @@ export default function ManagerDashboardPage() {
               {generateError}
             </div>
           )}
+          {generateWarning && (
+            <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+              ⚠ {generateWarning}
+            </div>
+          )}
           {constraintInfo && !generateError && (
             <div className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
               {constraintInfo}
@@ -1655,7 +1656,7 @@ export default function ManagerDashboardPage() {
           )}
           {missingConstraints.length > 0 && !generateError && (
             <div className="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded-xl px-4 py-3">
-              <p className="font-semibold mb-1">⚠️ לא הגישו אילוצים לשבוע הקרוב ({missingConstraints.length} עובדים):</p>
+              <p className="font-semibold mb-1">⚠️ לא הגישו אילוצים לתקופה הנוכחית ({missingConstraints.length} עובדים):</p>
               <p>{missingConstraints.join(" · ")}</p>
             </div>
           )}
@@ -1665,7 +1666,7 @@ export default function ManagerDashboardPage() {
               disabled={generating}
               className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
             >
-              {generating ? "טוען אילוצים..." : "צור סידור עבודה"}
+              {generating ? "ממלא אוטומטית..." : "צור סידור עבודה"}
             </button>
             <button
               onClick={handleLoadSaved}
@@ -1742,15 +1743,6 @@ export default function ManagerDashboardPage() {
               {publishResult.startsWith("שגיאה") ? "" : "✓ "}{publishResult}
             </p>
           )}
-          {autoGenerateResult && (
-            <p className={`text-sm rounded-lg px-3 py-2 border ${
-              autoGenerateResult.startsWith("שגיאה")
-                ? "text-red-700 bg-red-50 border-red-200"
-                : "text-teal-700 bg-teal-50 border-teal-200"
-            }`}>
-              {autoGenerateResult.startsWith("שגיאה") ? "" : "✓ "}{autoGenerateResult}
-            </p>
-          )}
           {generateSummary && !generateError && (
             <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
               {generateSummary}
@@ -1790,12 +1782,15 @@ export default function ManagerDashboardPage() {
         </section>
 
         {/* Constraints Overview */}
+        {(() => {
+          const { start: cStart, end: cEnd } = getSchedulingPeriod();
+          return (
         <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <h2 className="text-xl font-semibold text-gray-700">אילוצי עובדים לשבוע הקרוב</h2>
+              <h2 className="text-xl font-semibold text-gray-700">אילוצי עובדים לתקופה הקרובה</h2>
               <p className="text-xs text-gray-400 mt-0.5">
-                {formatDateShort(upcomingWeekStart)} – {formatDateShort(offsetDate(upcomingWeekStart, 6))}
+                {formatDateShort(cStart)} – {formatDateShort(cEnd)}
               </p>
             </div>
             <button
@@ -1817,63 +1812,51 @@ export default function ManagerDashboardPage() {
             <p className="text-gray-400 text-sm">טוען אילוצים...</p>
           ) : weekConstraints.length === 0 ? (
             <div className="text-sm text-gray-400 bg-gray-50 border border-gray-200 rounded-xl px-4 py-6 text-center">
-              לא הוגשו אילוצים לשבוע הקרוב — כל העובדים פנויים
+              לא הוגשו אילוצים לתקופה הקרובה — כל העובדים פנויים
             </div>
           ) : (
             <div className="space-y-2">
               <p className="text-xs text-gray-500">
                 {weekConstraints.length} אילוצים מ-{Array.from(new Set(weekConstraints.map((c) => c.employee_id))).length} עובדים
               </p>
-              <div className="overflow-x-auto rounded-xl border border-gray-200">
-                <table className="w-full text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-gray-800 text-white">
-                      <th className="text-right px-4 py-2.5 font-semibold">עובד</th>
-                      {DAYS.map((day, i) => (
-                        <th key={i} className="text-center px-2 py-2.5 font-semibold">
-                          <div>{day}</div>
-                          <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(offsetDate(upcomingWeekStart, i))}</div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from(new Set(weekConstraints.map((c) => c.employee_id))).sort().map((emp, idx) => (
-                      <tr key={emp} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}>
-                        <td className="px-4 py-2 font-medium text-gray-800 whitespace-nowrap">{emp}</td>
-                        {Array.from({ length: 7 }, (_, di) => {
-                          const date = offsetDate(upcomingWeekStart, di);
-                          const c = weekConstraints.find((x) => x.employee_id === emp && x.date_iso === date);
-                          if (!c) return <td key={di} className="px-2 py-2 text-center text-gray-200">—</td>;
+              <div className="space-y-3">
+                {Array.from(new Set(weekConstraints.map((c) => c.employee_id))).sort().map((emp) => {
+                  const empConstraints = weekConstraints
+                    .filter((x) => x.employee_id === emp)
+                    .sort((a, b) => a.date_iso.localeCompare(b.date_iso));
+                  return (
+                    <div key={emp} className="rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="bg-gray-100 px-4 py-2 font-medium text-gray-800 text-sm border-b border-gray-200">
+                        {emp} <span className="text-xs font-normal text-gray-500">({empConstraints.length} אילוצים)</span>
+                      </div>
+                      <div className="p-3 flex flex-wrap gap-2">
+                        {empConstraints.map((c) => {
+                          const [cy, cm, cd] = c.date_iso.split("-").map(Number);
+                          const dow = new Date(cy, cm - 1, cd).getDay();
                           const isAllDay  = c.constraint_type === "all-day";
                           const isMorning = c.constraint_type.startsWith("morning");
                           const badgeCls  = isAllDay  ? "bg-red-100 text-red-700 border-red-200"
                                           : isMorning ? "bg-amber-100 text-amber-700 border-amber-200"
                                           :             "bg-indigo-100 text-indigo-700 border-indigo-200";
-                          const label     = isAllDay ? "כל היום" : isMorning ? "בוקר" : "ערב";
+                          const label = isAllDay ? "כל היום" : isMorning ? "בוקר" : "ערב";
                           return (
-                            <td key={di} className="px-2 py-2 text-center">
-                              <div className="flex flex-col items-center gap-0.5">
-                                <span className={`inline-block font-medium px-1.5 py-0.5 rounded border ${badgeCls}`}>
-                                  {label}
-                                </span>
-                                {c.note && (
-                                  <span className="text-gray-500 text-xs leading-tight max-w-[72px] text-center break-words">
-                                    {c.note}
-                                  </span>
-                                )}
-                              </div>
-                            </td>
+                            <div key={c.date_iso} className={`inline-flex flex-col items-center px-2 py-1 rounded border text-xs ${badgeCls}`}>
+                              <span className="font-semibold">{DAYS[dow]} {formatDateShort(c.date_iso)}</span>
+                              <span>{label}</span>
+                              {c.note && <span className="text-gray-600 font-normal">{c.note}</span>}
+                            </div>
                           );
                         })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
         </section>
+          );
+        })()}
 
         {/* Status Cards */}
         <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
@@ -1899,14 +1882,14 @@ export default function ManagerDashboardPage() {
           )}
         </section>
 
-        {/* Weekly Schedule */}
+        {/* Monthly Schedule */}
         {schedule && scheduleStartDate && (
           <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h2 className="text-xl font-semibold text-gray-700">סידור עבודה שבועי</h2>
+              <h2 className="text-xl font-semibold text-gray-700">סידור עבודה חודשי</h2>
               <div className="flex items-center gap-3">
                 <span className="text-sm text-gray-400">
-                  {formatDateShort(scheduleStartDate)} – {formatDateShort(offsetDate(scheduleStartDate, 6))}
+                  {formatDateShort(scheduleStartDate)} – {formatDateShort(scheduleEndDate ?? offsetDate(scheduleStartDate, schedule ? schedule.length - 1 : 6))}
                 </span>
                 {coverage && (
                   <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
@@ -1931,8 +1914,10 @@ export default function ManagerDashboardPage() {
                     </th>
                     {schedule.map((_, di) => {
                       const date = offsetDate(scheduleStartDate, di);
-                      const isFri = di === 5;
-                      const isSat = di === 6;
+                      const [dy, dm, dd] = date.split("-").map(Number);
+                      const dow = new Date(dy, dm - 1, dd).getDay();
+                      const isFri = dow === 5;
+                      const isSat = dow === 6;
                       return (
                         <th
                           key={di}
@@ -1940,7 +1925,7 @@ export default function ManagerDashboardPage() {
                             isSat ? "bg-gray-600" : isFri ? "bg-gray-700" : "bg-gray-800"
                           }`}
                         >
-                          <div>{DAYS[di]}</div>
+                          <div>{DAYS[dow]}</div>
                           <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(date)}</div>
                         </th>
                       );

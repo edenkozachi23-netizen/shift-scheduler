@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { EMPLOYEES as STATIC_EMPLOYEES } from "@/lib/employees";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -51,12 +52,14 @@ export async function GET() {
 
   // ── Source 3 (fallback): distinct employee_ids from constraints table ─────
   // Works even if public.users is empty, as long as someone submitted constraints.
+  // Use service role key to bypass RLS.
+  const fallbackKey = SERVICE_KEY ?? SUPABASE_KEY;
   const res = await fetch(
     `${SUPABASE_URL}/rest/v1/employee_constraints?select=employee_id&order=employee_id.asc`,
     {
       headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
+        apikey: fallbackKey,
+        Authorization: `Bearer ${fallbackKey}`,
         Accept: "application/json",
       },
       cache: "no-store",
@@ -70,5 +73,6 @@ export async function GET() {
     if (names.length > 0) return NextResponse.json(names);
   }
 
-  return NextResponse.json([]);
+  // ── Source 4 (final fallback): static employee list from lib/employees.ts ──
+  return NextResponse.json([...STATIC_EMPLOYEES].sort((a, b) => a.localeCompare(b, "he")));
 }

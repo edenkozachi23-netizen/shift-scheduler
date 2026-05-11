@@ -6,20 +6,25 @@ import { EMPLOYEES } from "@/lib/employees";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-function getUpcomingWeekStart(): string {
-  const today = new Date();
-  const dow   = today.getDay();
-  const days  = dow === 0 ? 7 : 7 - dow;
-  const d     = new Date(today.getFullYear(), today.getMonth(), today.getDate() + days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+function getSchedulingPeriod(): { start: string; end: string } {
+  const today  = new Date();
+  const year   = today.getFullYear();
+  const month  = today.getMonth() + 1;
+  const day    = today.getDate();
+  const pad    = (n: number) => String(n).padStart(2, "0");
+  if (day >= 20) {
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear  = month === 12 ? year + 1 : year;
+    return { start: `${year}-${pad(month)}-20`, end: `${nextYear}-${pad(nextMonth)}-19` };
+  } else {
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear  = month === 1 ? year - 1 : year;
+    return { start: `${prevYear}-${pad(prevMonth)}-20`, end: `${year}-${pad(month)}-19` };
+  }
 }
 
-function offsetDate(start: string, n: number): string {
-  const [y, m, d] = start.split("-").map(Number);
-  const r = new Date(y, m - 1, d + n);
-  return `${r.getFullYear()}-${String(r.getMonth() + 1).padStart(2, "0")}-${String(r.getDate()).padStart(2, "0")}`;
-}
 
 const dbHeaders = (extra?: Record<string, string>) => ({
   apikey:         SUPABASE_KEY,
@@ -38,26 +43,62 @@ export async function POST(_request: Request) {
     return NextResponse.json({ error: "Forbidden — manager role required" }, { status: 403 });
   }
 
-  const weekStart = getUpcomingWeekStart();
-  const weekEnd   = offsetDate(weekStart, 6);
+  const { start: weekStart, end: weekEnd } = getSchedulingPeriod();
 
-  // 0. Fetch active employees from DB
-  const eRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/users?role=eq.employee&is_active=eq.true&select=name&order=name.asc`,
-    { headers: dbHeaders(), cache: "no-store" }
-  );
-  if (!eRes.ok) {
-    return NextResponse.json({ error: "Failed to fetch employees" }, { status: 500 });
+  // 0. Fetch active employees — try service role (auth.users) first, then public.users, then static list
+  let employeeList: string[] = [];
+
+  if (SERVICE_KEY) {
+    const authRes = await fetch(
+      `${SUPABASE_URL}/auth/v1/admin/users?per_page=200`,
+      {
+        headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` },
+        cache: "no-store",
+      }
+    );
+    if (authRes.ok) {
+      const { users: authUsers } = await authRes.json() as {
+        users: { user_metadata: Record<string, unknown> }[];
+      };
+      const names = authUsers
+        .filter(
+          (u) =>
+            u.user_metadata?.role === "employee" &&
+            typeof u.user_metadata?.display_name === "string" &&
+            (u.user_metadata.display_name as string).trim() !== ""
+        )
+        .map((u) => u.user_metadata.display_name as string)
+        .sort((a, b) => a.localeCompare(b, "he"));
+      if (names.length > 0) employeeList = names;
+    }
   }
-  const empRows = await eRes.json() as { name: string }[];
-  const employeeList: string[] = empRows.map((r) => r.name);
 
-  // 1. Fetch constraints for the upcoming week
+  if (employeeList.length === 0) {
+    const eRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/users?role=eq.employee&is_active=eq.true&select=name&order=name.asc`,
+      { headers: dbHeaders(), cache: "no-store" }
+    );
+    if (eRes.ok) {
+      const empRows = await eRes.json() as { name: string }[];
+      if (empRows.length > 0) employeeList = empRows.map((r) => r.name);
+    }
+  }
+
+  // Final fallback: static employee list
+  if (employeeList.length === 0) {
+    employeeList = [...EMPLOYEES];
+  }
+
+  // 1. Fetch constraints for the scheduling period — use service role to bypass RLS
+  const constraintKey = SERVICE_KEY ?? SUPABASE_KEY;
   const cRes = await fetch(
     `${SUPABASE_URL}/rest/v1/employee_constraints` +
     `?date_iso=gte.${weekStart}&date_iso=lte.${weekEnd}` +
     `&select=employee_id,date_iso,constraint_type,note&order=date_iso.asc`,
-    { headers: dbHeaders(), cache: "no-store" }
+    {
+      headers: { apikey: constraintKey, Authorization: `Bearer ${constraintKey}`, Accept: "application/json" },
+      cache: "no-store",
+    }
   );
   if (!cRes.ok) {
     return NextResponse.json({ error: `Failed to fetch constraints: ${await cRes.text()}` }, { status: 500 });

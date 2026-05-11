@@ -2,12 +2,14 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-function headers(extra?: Record<string, string>) {
+function headers(key?: string, extra?: Record<string, string>) {
+  const k = key ?? SUPABASE_KEY!;
   return {
-    apikey: SUPABASE_KEY!,
-    Authorization: `Bearer ${SUPABASE_KEY}`,
+    apikey: k,
+    Authorization: `Bearer ${k}`,
     "Content-Type": "application/json",
     Accept: "application/json",
     ...extra,
@@ -39,13 +41,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing from/to params" }, { status: 400 });
   }
 
+  // Use service role key so RLS doesn't block reading saved entries
+  const key = SERVICE_KEY ?? SUPABASE_KEY;
   const url =
     `${SUPABASE_URL}/rest/v1/saved_schedule_entries` +
     `?date=gte.${from}&date=lte.${to}` +
     `&select=date,period,employee_id,shift_template_id` +
     `&order=date.asc,period.asc`;
 
-  const res = await fetch(url, { headers: headers(), cache: "no-store" });
+  const res = await fetch(url, { headers: headers(key), cache: "no-store" });
   const body = await res.text();
   if (!res.ok) {
     return NextResponse.json({ error: `Supabase error ${res.status}: ${body}` }, { status: res.status });
@@ -54,8 +58,8 @@ export async function GET(request: Request) {
 }
 
 // ─── POST /api/schedule-entries ───────────────────────────────────────────────
-// Requires manager role. Replaces all saved entries for the given week (Sun–Sat).
-// Body: { weekStart: string, entries: { date, period, employeeId, shiftTemplateId }[] }
+// Requires manager role. Replaces all saved entries for the given period.
+// Body: { weekStart: string, periodEnd?: string, entries: [...] }
 export async function POST(request: Request) {
   if (!SUPABASE_URL || !SUPABASE_KEY) return missingEnv();
 
@@ -67,8 +71,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Forbidden — manager role required" }, { status: 403 });
   }
 
-  const { weekStart, entries } = await request.json() as {
+  const { weekStart, periodEnd: bodyPeriodEnd, entries } = await request.json() as {
     weekStart: string;
+    periodEnd?: string;
     entries: { date: string; period: string; employeeId: string; shiftTemplateId: string }[];
   };
 
@@ -76,15 +81,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  // Compute weekEnd (6 days after weekStart)
-  const [y, m, d] = weekStart.split("-").map(Number);
-  const end = new Date(y, m - 1, d + 6);
-  const weekEnd = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+  // Use provided periodEnd or fall back to weekStart + 6 days (backward compat)
+  const periodEnd = bodyPeriodEnd ?? (() => {
+    const [y, m, d] = weekStart.split("-").map(Number);
+    const end = new Date(y, m - 1, d + 6);
+    return `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, "0")}-${String(end.getDate()).padStart(2, "0")}`;
+  })();
 
-  // 1. Delete all existing entries for this week
+  // Use service role key to bypass RLS on write operations
+  const key = SERVICE_KEY ?? SUPABASE_KEY;
+
+  // 1. Delete all existing entries for this period
   const del = await fetch(
-    `${SUPABASE_URL}/rest/v1/saved_schedule_entries?date=gte.${weekStart}&date=lte.${weekEnd}`,
-    { method: "DELETE", headers: headers() }
+    `${SUPABASE_URL}/rest/v1/saved_schedule_entries?date=gte.${weekStart}&date=lte.${periodEnd}`,
+    { method: "DELETE", headers: headers(key) }
   );
   if (!del.ok) {
     const body = await del.text();
@@ -103,7 +113,7 @@ export async function POST(request: Request) {
 
     const ins = await fetch(`${SUPABASE_URL}/rest/v1/saved_schedule_entries`, {
       method: "POST",
-      headers: headers({ Prefer: "return=minimal" }),
+      headers: headers(key, { Prefer: "return=minimal" }),
       body: JSON.stringify(rows),
     });
     if (!ins.ok) {
