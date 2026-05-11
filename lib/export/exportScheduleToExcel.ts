@@ -672,7 +672,9 @@ export function exportScheduleToExcel(input: ExportInput): void {
     const weekDays = input.days.slice(chunk.start, chunk.end);
     const from = weekDays[0].date;
     const to   = weekDays[weekDays.length - 1].date;
-    const sheetName = `שבוע ${i + 1} (${from}–${to})`;
+    // Excel sheet names cannot contain / \ ? * [ ] : — replace / with .
+    const safeName = (d: string) => d.replace(/\//g, ".");
+    const sheetName = `שבוע ${i + 1} (${safeName(from)}-${safeName(to)})`;
     const weekLabel = `שבוע ${i + 1}  ·  ${from} – ${to}`;
     XLSX.utils.book_append_sheet(wb, buildScheduleSheet(weekDays, weekLabel), sheetName);
   });
