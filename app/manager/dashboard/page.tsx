@@ -56,28 +56,39 @@ function formatDateShort(dateStr: string): string {
   return `${parseInt(day)}/${parseInt(month)}`;
 }
 
-/** Returns the monthly scheduling period: 20th of last month → 19th of this month
- *  (or 20th of this month → 19th of next month when today ≥ 20). */
+/** Returns the scheduling period aligned to full Sun–Sat weeks.
+ *  Base: 20th of last/this month → 19th of this/next month.
+ *  Then the start is rewound to the Sunday of that week, and
+ *  the end is advanced to the Saturday of that week — so no
+ *  half-weeks ever appear. */
 function getSchedulingPeriod(): { start: string; end: string } {
+  const toISO = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const today = new Date();
   const year  = today.getFullYear();
   const month = today.getMonth() + 1;
   const day   = today.getDate();
+
+  let baseStart: Date, baseEnd: Date;
   if (day >= 20) {
     const nm = month === 12 ? 1 : month + 1;
     const ny = month === 12 ? year + 1 : year;
-    return {
-      start: `${year}-${String(month).padStart(2, "0")}-20`,
-      end:   `${ny}-${String(nm).padStart(2, "0")}-19`,
-    };
+    baseStart = new Date(year, month - 1, 20);
+    baseEnd   = new Date(ny,   nm - 1,   19);
   } else {
     const pm = month === 1 ? 12 : month - 1;
     const py = month === 1 ? year - 1 : year;
-    return {
-      start: `${py}-${String(pm).padStart(2, "0")}-20`,
-      end:   `${year}-${String(month).padStart(2, "0")}-19`,
-    };
+    baseStart = new Date(py,   pm - 1,   20);
+    baseEnd   = new Date(year, month - 1, 19);
   }
+
+  // Rewind start to Sunday, advance end to Saturday
+  const start = new Date(baseStart);
+  start.setDate(baseStart.getDate() - baseStart.getDay());
+  const end = new Date(baseEnd);
+  end.setDate(baseEnd.getDate() + (6 - baseEnd.getDay()));
+
+  return { start: toISO(start), end: toISO(end) };
 }
 
 // ─── Engine ↔ UI schedule conversion ─────────────────────────────────────────
