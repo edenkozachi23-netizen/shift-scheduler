@@ -2110,21 +2110,24 @@ export default function ManagerDashboardPage() {
                   <h3 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
                     {title} — {data.label}
                   </h3>
+                  <p className="text-xs text-gray-400 mb-1">
+                    עמודות התת-תקופות (שבועות / חודשים) מציגות מספר משמרות. עמד מעל כותרת עמודה לקבלת הסבר מלא.
+                  </p>
                   <div className="overflow-x-auto rounded-xl border border-gray-200">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className={`bg-${accent}-700 text-white text-xs`}>
                           <th className="text-right px-4 py-2.5 font-semibold whitespace-nowrap">עובד</th>
                           {data.subLabels.map((lbl) => (
-                            <th key={lbl} className="text-center px-3 py-2.5 font-semibold whitespace-nowrap">{lbl}</th>
+                            <th key={lbl} title="מספר משמרות בתת-תקופה זו" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">{lbl}</th>
                           ))}
-                          <th className="text-center px-3 py-2.5 font-semibold">סה״כ</th>
-                          <th className="text-center px-3 py-2.5 font-semibold">בוקר</th>
-                          <th className="text-center px-3 py-2.5 font-semibold">ערב</th>
-                          <th className="text-center px-3 py-2.5 font-semibold">שישי</th>
-                          <th className="text-center px-3 py-2.5 font-semibold">שבת</th>
-                          <th className="text-center px-3 py-2.5 font-semibold whitespace-nowrap">ממוצע/שבוע</th>
-                          <th className="text-center px-3 py-2.5 font-semibold">עומס</th>
+                          <th title="סך כל המשמרות בתקופה" className="text-center px-3 py-2.5 font-semibold cursor-help">סה״כ</th>
+                          <th title="מספר משמרות בוקר (07:00–19:00 או 08:00–20:00)" className="text-center px-3 py-2.5 font-semibold cursor-help">בוקר</th>
+                          <th title="מספר משמרות ערב (19:00–07:00 או 20:00–08:00)" className="text-center px-3 py-2.5 font-semibold cursor-help">ערב</th>
+                          <th title="מספר משמרות בימי שישי" className="text-center px-3 py-2.5 font-semibold cursor-help">שישי</th>
+                          <th title="מספר משמרות בימי שבת" className="text-center px-3 py-2.5 font-semibold cursor-help">שבת</th>
+                          <th title="ממוצע משמרות לשבוע בתקופה זו" className="text-center px-3 py-2.5 font-semibold whitespace-nowrap cursor-help">ממוצע/שבוע</th>
+                          <th title="רמת עומס: עמוס = 5+ משמרות | תקין = 3–4 | קל = 0–2" className="text-center px-3 py-2.5 font-semibold cursor-help">עומס</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2155,6 +2158,11 @@ export default function ManagerDashboardPage() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                  <div className="flex gap-4 mt-2 text-xs text-gray-400">
+                    <span><span className="inline-block w-2 h-2 rounded-full bg-red-400 mr-1" />עמוס — 5+ משמרות בשבוע</span>
+                    <span><span className="inline-block w-2 h-2 rounded-full bg-blue-400 mr-1" />תקין — 3–4 משמרות בשבוע</span>
+                    <span><span className="inline-block w-2 h-2 rounded-full bg-green-400 mr-1" />קל — 0–2 משמרות בשבוע</span>
                   </div>
                 </div>
               ) : null
