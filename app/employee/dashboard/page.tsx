@@ -52,24 +52,20 @@ function isoPlus(iso: string, days: number): string {
 
 type SchedulingPeriod = { start: string; end: string; label: string };
 
+/** Returns the Sun–Sat calendar week that contains the given date.
+ *  Used to track per-week constraint limits and show the submission deadline. */
 function getSchedulingPeriod(isoDate: string): SchedulingPeriod {
   const [year, month, day] = isoDate.split("-").map(Number);
-  let start: string, end: string;
-  if (day >= 20) {
-    // Submission window for next month's schedule: 20th this month → 10th next month
-    const nextMonth = month === 12 ? 1 : month + 1;
-    const nextYear  = month === 12 ? year + 1 : year;
-    start = `${year}-${String(month).padStart(2, "0")}-20`;
-    end   = `${nextYear}-${String(nextMonth).padStart(2, "0")}-10`;
-  } else {
-    // In the window that started on the 20th of last month, ending 10th of this month
-    const prevMonth = month === 1 ? 12 : month - 1;
-    const prevYear  = month === 1 ? year - 1 : year;
-    start = `${prevYear}-${String(prevMonth).padStart(2, "0")}-20`;
-    end   = `${year}-${String(month).padStart(2, "0")}-10`;
-  }
-  const fmt = (s: string) => { const [,m,d] = s.split("-").map(Number); return `${d}/${m}`; };
-  return { start, end, label: `${fmt(start)} – ${fmt(end)}` };
+  const dt  = new Date(year, month - 1, day);
+  const dow = dt.getDay(); // 0=Sun … 6=Sat
+  const sun = new Date(dt);
+  sun.setDate(dt.getDate() - dow);          // rewind to Sunday
+  const sat = new Date(sun);
+  sat.setDate(sun.getDate() + 6);           // advance to Saturday
+  const toISO = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const toLabel = (d: Date) => `${d.getDate()}/${d.getMonth() + 1}`;
+  return { start: toISO(sun), end: toISO(sat), label: `${toLabel(sun)} – ${toLabel(sat)}` };
 }
 
 function countInPeriod(constraints: Constraint[], period: SchedulingPeriod): number {
@@ -449,7 +445,7 @@ export default function EmployeeDashboardPage() {
                 }`}>
                   <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="font-semibold">
-                      תקופה: {currentPeriod.label}
+                      שבוע נוכחי: {currentPeriod.label}
                     </span>
                     <span className={`font-bold ${urgentDeadline ? "text-red-700" : "text-blue-700"}`}>
                       {daysLeft <= 0 ? "פג תוקף" : `עוד ${daysLeft} יום${daysLeft === 1 ? "" : "ים"} להגשה`}
@@ -457,7 +453,7 @@ export default function EmployeeDashboardPage() {
                   </div>
                   <div className="flex items-center justify-between gap-2">
                     <span>
-                      {periodUsed} מתוך {MAX_CONSTRAINTS} אילוצים הוגשו בתקופה זו
+                      {periodUsed} מתוך {MAX_CONSTRAINTS} אילוצים הוגשו השבוע
                     </span>
                     {remaining === 0
                       ? <span className="font-semibold text-red-700">הגעת למגבלה</span>

@@ -56,31 +56,20 @@ function formatDateShort(dateStr: string): string {
   return `${parseInt(day)}/${parseInt(month)}`;
 }
 
-/** Returns the scheduling period (20th of previous/current month → 19th of current/next month).
- *  Mirrors the employee dashboard logic: if today >= 20, the active schedule period is
- *  20th this month → 19th next month. Otherwise it's 20th last month → 19th this month. */
+/** Returns the upcoming Sun–Sat week as the active schedule period.
+ *  If today is Sunday the period is this week (today → +6 days).
+ *  If today is Mon–Sat the period is the NEXT Sun–Sat week. */
 function getSchedulingPeriod(): { start: string; end: string } {
+  const toISO = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const today = new Date();
-  const year  = today.getFullYear();
-  const month = today.getMonth() + 1; // 1-based
-  const day   = today.getDate();
-  if (day >= 20) {
-    // Active schedule: 20th this month → 19th next month
-    const nextMonth = month === 12 ? 1 : month + 1;
-    const nextYear  = month === 12 ? year + 1 : year;
-    return {
-      start: `${year}-${String(month).padStart(2, "0")}-20`,
-      end:   `${nextYear}-${String(nextMonth).padStart(2, "0")}-19`,
-    };
-  } else {
-    // Active schedule: 20th last month → 19th this month
-    const prevMonth = month === 1 ? 12 : month - 1;
-    const prevYear  = month === 1 ? year - 1 : year;
-    return {
-      start: `${prevYear}-${String(prevMonth).padStart(2, "0")}-20`,
-      end:   `${year}-${String(month).padStart(2, "0")}-19`,
-    };
-  }
+  const dow   = today.getDay(); // 0=Sun … 6=Sat
+  const daysToSunday = (7 - dow) % 7; // 0 when today is Sun
+  const start = new Date(today);
+  start.setDate(today.getDate() + daysToSunday);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  return { start: toISO(start), end: toISO(end) };
 }
 
 // ─── Engine ↔ UI schedule conversion ─────────────────────────────────────────
