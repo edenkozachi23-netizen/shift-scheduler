@@ -659,14 +659,12 @@ export function exportScheduleToExcel(input: ExportInput): void {
   const { periodLabel } = input;
   const wb = XLSX.utils.book_new();
 
-  // Split the full period into 4 weekly chunks and create a tab for each
+  // Split into 7-day chunks; last chunk may be shorter if period isn't divisible by 7
   const total = input.days.length;
-  const chunks = [
-    { start: 0,  end: Math.min(7,  total) },
-    { start: 7,  end: Math.min(14, total) },
-    { start: 14, end: Math.min(21, total) },
-    { start: 21, end: total },
-  ].filter((c) => c.start < total);
+  const chunks: { start: number; end: number }[] = [];
+  for (let s = 0; s < total; s += 7) {
+    chunks.push({ start: s, end: Math.min(s + 7, total) });
+  }
 
   chunks.forEach((chunk, i) => {
     const weekDays = input.days.slice(chunk.start, chunk.end);
@@ -679,14 +677,15 @@ export function exportScheduleToExcel(input: ExportInput): void {
     XLSX.utils.book_append_sheet(wb, buildScheduleSheet(weekDays, weekLabel), sheetName);
   });
 
+  // Monthly stats always present (computed from current schedule if no history)
+  if (input.monthlyStats)   XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.monthlyStats),   "משמרות לפי עובד - חודשי");
+  if (input.quarterlyStats) XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.quarterlyStats), "משמרות לפי עובד - רבעוני");
+  if (input.yearlyStats)    XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.yearlyStats),    "משמרות לפי עובד - שנתי");
+
   XLSX.utils.book_append_sheet(wb, buildStatsSheet(input.stats, periodLabel),           "נתוני עובדים");
   XLSX.utils.book_append_sheet(wb, buildValidationSheet(input.violations, periodLabel), "בדיקת תקינות");
   XLSX.utils.book_append_sheet(wb, buildShortagesSheet(input.shortages, periodLabel),   "חוסרים");
   XLSX.utils.book_append_sheet(wb, buildInsightsSheet(input.insights, periodLabel),     "תובנות");
-
-  if (input.monthlyStats)   XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.monthlyStats),   "חודשי");
-  if (input.quarterlyStats) XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.quarterlyStats), "רבעוני");
-  if (input.yearlyStats)    XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.yearlyStats),    "שנתי");
 
   XLSX.writeFile(wb, `schedule_${periodLabel.replace(/\//g, "-")}.xlsx`);
 }

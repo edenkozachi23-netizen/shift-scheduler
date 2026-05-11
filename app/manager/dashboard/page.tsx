@@ -9,7 +9,7 @@ import { SHIFT_TEMPLATES, SHIFT_TEMPLATE_MAP } from "@/lib/scheduling/shiftTempl
 import { validateShiftCoverage } from "@/lib/scheduling/validateShiftCoverage";
 import { validateSchedule, VIOLATION_LABEL } from "@/lib/scheduling/validateSchedule";
 import type { ScheduleViolation, ViolationCode } from "@/lib/scheduling/validateSchedule";
-import type { ScheduleEntry, Constraint, ConstraintType } from "@/lib/scheduling/types";
+import type { ScheduleEntry, Assignment, Constraint, ConstraintType } from "@/lib/scheduling/types";
 import { canAssignEmployeeToShift } from "@/lib/scheduling/canAssignEmployeeToShift";
 import {
   exportScheduleToExcel,
@@ -1219,6 +1219,32 @@ export default function ManagerDashboardPage() {
         };
       });
 
+      // Always compute monthly stats from the current schedule so the
+      // "נתוני עובדים - חודשי" sheet is present even without saved history.
+      const scheduleEntries: ScheduleEntry[] = [];
+      schedule.forEach((day, i) => {
+        const entryDate = offsetDate(scheduleStartDate, i);
+        for (const period of ["morning", "evening"] as const) {
+          const assignments: Assignment[] = day[period]
+            .filter((v): v is Exclude<SlotValue, ""> => v !== "")
+            .map((v) => {
+              const tpl = SHIFT_TEMPLATE_MAP[v.templateId];
+              return {
+                employeeId:      v.employee,
+                shiftTemplateId: v.templateId,
+                shiftLabelHe:    tpl?.shiftLabelHe ?? v.templateId,
+                startTime:       tpl?.startTime ?? "",
+                endTime:         tpl?.endTime ?? "",
+                shortenedStart:  v.shortenedStart,
+              };
+            });
+          if (assignments.length > 0) {
+            scheduleEntries.push({ date: entryDate, period, assignments });
+          }
+        }
+      });
+      const currentMonthStats = buildPeriodStats(periodLabel, scheduleEntries, "week", employees);
+
       const input: ExportInput = {
         periodLabel,
         days,
@@ -1226,7 +1252,7 @@ export default function ManagerDashboardPage() {
         violations,
         shortages: [],
         insights:  computeExportInsights(employeeStats),
-        ...(monthlyData   ? { monthlyStats:   monthlyData   } : {}),
+        monthlyStats:   monthlyData ?? currentMonthStats,
         ...(quarterlyData ? { quarterlyStats: quarterlyData } : {}),
         ...(yearlyData    ? { yearlyStats:    yearlyData    } : {}),
       };
