@@ -521,6 +521,19 @@ function buildPeriodStats(
   return { label, subLabels, avgDivisor, rows };
 }
 
+// ─── InfoTooltip ──────────────────────────────────────────────────────────────
+
+function InfoTooltip({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex items-center">
+      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-300 text-gray-700 text-[10px] font-bold cursor-default select-none leading-none">i</span>
+      <span className="pointer-events-none absolute bottom-full right-0 mb-1.5 w-56 rounded-lg bg-gray-800 text-white text-xs px-3 py-2 shadow-lg opacity-0 group-hover:opacity-100 transition-opacity z-50 whitespace-pre-wrap text-right leading-relaxed">
+        {text}
+      </span>
+    </span>
+  );
+}
+
 // ─── SlotCell ─────────────────────────────────────────────────────────────────
 
 type SlotProps = {
@@ -2125,7 +2138,10 @@ export default function ManagerDashboardPage() {
                     {coverage && (
                       <tr className="bg-gray-50">
                         <td className="text-xs font-bold text-gray-500 text-center px-2 py-2 bg-gray-100">
-                          מעבר
+                          <div className="flex items-center justify-center gap-1">
+                            מעבר
+                            <InfoTooltip text={"בודק האם כל משמרת בוקר מחוברת למשמרת ערב:\n• כל שעת סיום בוקר חייבת להיות שעת התחלה של ערב\n• חובה 2 עובדים בכל משמרת\n✓ = תקין | ✗ = בעיית מעבר"} />
+                          </div>
                         </td>
                         {tabCols.map((col, ci) => {
                           if (col.isEmpty) {
@@ -2155,7 +2171,10 @@ export default function ManagerDashboardPage() {
         {scheduleValidation && (
           <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
-              <h2 className="text-xl font-semibold text-gray-700">בדיקת תקינות</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-semibold text-gray-700">בדיקת תקינות</h2>
+                <InfoTooltip text={"בודק חוקים של הסידור:\n• הפרות קשות (אדום): כפילות, בוקר+ערב ביום אחד, ערב→בוקר ללא מנוחה, חריגת מכסה שבועית/לילה\n• הפרות רכות (צהוב): אין בוקר בחול, אין סוף שבוע פנוי\n• חוסרים: משמרות עם פחות מ-2 עובדים"} />
+              </div>
               {(() => {
                 const ruleIssues = scheduleValidation.hardCount + scheduleValidation.softCount;
                 const coverageIssues = coverage ? coverage.days.filter((d) => !d.valid).length : 0;
