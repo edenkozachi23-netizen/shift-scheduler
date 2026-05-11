@@ -630,14 +630,21 @@ type ValidationPanelProps = {
   hardCount: number;
   softCount: number;
   violations: ScheduleViolation[];
+  missingCount: number;
+  coverageIssues: number;
 };
 
-function ValidationPanel({ hardCount, softCount, violations }: ValidationPanelProps) {
+function ValidationPanel({ hardCount, softCount, violations, missingCount, coverageIssues }: ValidationPanelProps) {
   if (hardCount + softCount === 0) {
+    const allClear = missingCount === 0 && coverageIssues === 0;
     return (
-      <div className="flex items-center gap-2 px-4 py-3 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 font-medium">
-        <span>✓</span>
-        <span>הסידור תקין — אין הפרות כללים</span>
+      <div className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium ${allClear ? "bg-green-50 border border-green-200 text-green-700" : "bg-amber-50 border border-amber-200 text-amber-700"}`}>
+        <span>{allClear ? "✓" : "!"}</span>
+        <span>
+          {allClear
+            ? "הסידור תקין — אין הפרות כללים"
+            : `אין הפרות כללים${missingCount > 0 ? ` — ${missingCount} משמרות לא מאוישות` : ""}${coverageIssues > 0 ? ` — ${coverageIssues} ימים עם בעיית מעבר` : ""}`}
+        </span>
       </div>
     );
   }
@@ -2130,20 +2137,27 @@ export default function ManagerDashboardPage() {
           <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h2 className="text-xl font-semibold text-gray-700">בדיקת תקינות</h2>
-              {scheduleValidation.valid ? (
-                <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700">
-                  ✓ תקין
-                </span>
-              ) : (
-                <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-600">
-                  {scheduleValidation.hardCount + scheduleValidation.softCount} בעיות
-                </span>
-              )}
+              {(() => {
+                const ruleIssues = scheduleValidation.hardCount + scheduleValidation.softCount;
+                const coverageIssues = coverage ? coverage.days.filter((d) => !d.valid).length : 0;
+                const totalIssues = ruleIssues + missing.length + coverageIssues;
+                return totalIssues === 0 ? (
+                  <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700">
+                    ✓ תקין
+                  </span>
+                ) : (
+                  <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-red-50 border border-red-200 text-red-600">
+                    {totalIssues} בעיות
+                  </span>
+                );
+              })()}
             </div>
             <ValidationPanel
               hardCount={scheduleValidation.hardCount}
               softCount={scheduleValidation.softCount}
               violations={scheduleValidation.violations}
+              missingCount={missing.length}
+              coverageIssues={coverage ? coverage.days.filter((d) => !d.valid).length : 0}
             />
           </section>
         )}
