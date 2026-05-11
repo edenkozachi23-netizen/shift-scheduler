@@ -557,38 +557,50 @@ function buildInsightsSheet(insights: ExportInsight[], periodLabel: string): XLS
 //   Row 1 — [שם | sub1 | sub2 | ... | סה"כ | בוקר | ערב | שישי | שבת | ממוצע/שבוע | עומס]
 //   Row 2+ — data
 
-function buildPeriodStatsSheet(period: ExportPeriodStats): XLSX.WorkSheet {
+function buildPeriodStatsSheet(period: ExportPeriodStats, periodType?: string): XLSX.WorkSheet {
   const { label, subLabels, avgDivisor, rows } = period;
-  const NS = subLabels.length;                   // number of sub-period columns
-  const NC = 1 + NS + 5 + 1 + 1;               // name + sub + total+mor+eve+fri+sat + avg + load
+  const NS  = subLabels.length;
+  const NC  = 1 + NS + 5 + 1 + 1;   // name + subs + total+mor+eve+fri+sat + avg + load
 
-  const titleRow = [label, ...Array(NC - 1).fill("")];
-  const headerRow = [
-    "שם עובד",
-    ...subLabels,
-    'סה"כ', "בוקר", "ערב", "שישי", "שבת",
-    "ממוצע\nמשמרות/שבוע",
-    "עומס",
+  const subKind  = avgDivisor <= 5 ? "שבועות" : "חודשים";
+  const typeLabel = periodType ?? "";
+
+  // Row 0 — title
+  // Row 1 — subtitle (period type + sub-column explanation)
+  // Row 2 — headers
+  // Row 3+ — data
+  // Last row — legend
+
+  const legendNote = "קוד צבע עומס:  🔴 עמוס = 5+ משמרות/שבוע  |  🔵 תקין = 3–4  |  🟢 קל = 0–2  |  עמודות שישי/שבת מסומנות אדום כשגבוהות";
+
+  const aoa = [
+    [`משמרות לפי עובד — ${typeLabel}  ·  ${label}`, ...Array(NC - 1).fill("")],
+    [`כל עמודה מציגה מספר משמרות ב${subKind}. עמודת "שיא" בכחול = ${subKind.slice(0, -2)} הכי עמוס לאותו עובד.`, ...Array(NC - 1).fill("")],
+    ["שם עובד", ...subLabels, 'סה"כ', "בוקר", "ערב", "שישי", "שבת", "ממוצע\n/שבוע", "עומס"],
+    ...rows.map((r) => [
+      r.name, ...r.subCounts,
+      r.total, r.morning, r.evening, r.friday, r.saturday,
+      avgDivisor > 0 ? +(r.total / avgDivisor).toFixed(1) : 0,
+      r.loadLevel,
+    ]),
+    [legendNote, ...Array(NC - 1).fill("")],
   ];
 
-  const dataRows = rows.map((r) => [
-    r.name,
-    ...r.subCounts,
-    r.total, r.morning, r.evening, r.friday, r.saturday,
-    avgDivisor > 0 ? +(r.total / avgDivisor).toFixed(1) : 0,
-    r.loadLevel,
-  ]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-  const ws = XLSX.utils.aoa_to_sheet([titleRow, headerRow, ...dataRows]);
+  const dataStart = 3;
+  const legendRow = dataStart + rows.length;
 
-  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: NC - 1 } }];
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: NC - 1 } },   // title
+    { s: { r: 1, c: 0 }, e: { r: 1, c: NC - 1 } },   // subtitle
+    { s: { r: legendRow, c: 0 }, e: { r: legendRow, c: NC - 1 } }, // legend
+  ];
 
-  // Widths: name(16), sub cols(10 each), fixed cols(8 each), avg(14), load(10)
-  setColWidths(ws, [16, ...Array(NS).fill(10), 8, 8, 8, 8, 8, 14, 10]);
-  setRowHeights(ws, [30, 28, ...rows.map(() => 22)]);
+  setColWidths(ws, [18, ...Array(NS).fill(11), 8, 8, 8, 8, 8, 12, 10]);
+  setRowHeights(ws, [32, 20, 28, ...rows.map(() => 22), 24]);
   setRTL(ws);
 
-  // Column index helpers
   const COL_TOTAL = 1 + NS;
   const COL_MOR   = COL_TOTAL + 1;
   const COL_EVE   = COL_TOTAL + 2;
@@ -599,46 +611,58 @@ function buildPeriodStatsSheet(period: ExportPeriodStats): XLSX.WorkSheet {
 
   applyStyles(ws, (r, c) => {
     if (r === 0) return S_TITLE;
-    if (r === 1) {
-      // Sub-period headers get a distinct tint
+
+    if (r === 1) return {   // subtitle row
+      font: f(false, 9, C.TEXT_MID), fill: bg("EFF6FF"),
+      alignment: a("right", "middle", true), border: bThin,
+    };
+
+    if (r === 2) {          // header row
       if (c >= 1 && c <= NS) return {
         font: f(true, 9, C.WHITE), fill: bg(C.BLUE_DIM),
         alignment: a("center", "middle", true), border: bThin,
       };
+      // Morning / Evening header tints
+      if (c === COL_MOR) return { font: f(true, 9, C.WHITE), fill: bg(C.MORNING_HD), alignment: a("center", "middle"), border: bThin };
+      if (c === COL_EVE) return { font: f(true, 9, C.WHITE), fill: bg(C.EVENING_HD), alignment: a("center", "middle"), border: bThin };
       return S_HEADER;
     }
 
-    const row = rows[r - 2];
-    const alt = (r - 2) % 2 === 1;
+    if (r === legendRow) return {   // legend row
+      font: f(false, 9, C.TEXT_MID), fill: bg("F8FAFC"),
+      alignment: a("right", "middle", true), border: bThin,
+    };
 
-    if (c === 0)        return sDR(alt);
-    if (c === COL_LOAD) return LOAD[row.loadLevel];
-    if (c === COL_TOTAL) return LOAD[row.loadLevel];  // total = load color
+    const rowIdx = r - dataStart;
+    if (rowIdx < 0 || rowIdx >= rows.length) return sDC();
+    const row = rows[rowIdx];
+    const alt = rowIdx % 2 === 1;
 
-    // Sub-period cells — bold the max week for each row
+    if (c === 0)         return sDR(alt);
+    if (c === COL_LOAD)  return LOAD[row.loadLevel];
+    if (c === COL_TOTAL) return LOAD[row.loadLevel];
+
     if (c >= 1 && c <= NS) {
       const maxCount = Math.max(...row.subCounts);
       const val = row.subCounts[c - 1];
-      if (val === maxCount && maxCount > 0) {
-        return { font: f(true, 10, C.NAVY), fill: alt ? bg(C.MORNING_BG2) : bg(C.MORNING_BG),
-                 alignment: a("center", "top"), border: bThin };
-      }
+      if (val === maxCount && maxCount > 0)
+        return { font: f(true, 10, C.NAVY), fill: alt ? bg(C.MORNING_BG2) : bg(C.MORNING_BG), alignment: a("center", "top"), border: bThin };
       return sDC(alt);
     }
 
-    // Weekend columns
+    if (c === COL_MOR) return { font: f(false, 10, C.TEXT), fill: bg(alt ? C.MORNING_BG2 : C.MORNING_BG), alignment: a("center", "top"), border: bThin };
+    if (c === COL_EVE) return { font: f(false, 10, C.TEXT), fill: bg(alt ? C.EVENING_BG2 : C.EVENING_BG), alignment: a("center", "top"), border: bThin };
+
     if (c === COL_FRI || c === COL_SAT) {
       const n = c === COL_FRI ? row.friday : row.saturday;
-      const thresh = avgDivisor;   // e.g. 4 for month, 13 for quarter
-      if (n >= thresh)           return { font: f(true, 10, C.ERR_FG),  fill: bg(C.ERR_BG),  alignment: a("center", "top"), border: bThin };
-      if (n >= Math.ceil(thresh / 2)) return { font: f(true, 10, C.WARN_FG), fill: bg(C.WARN_BG), alignment: a("center", "top"), border: bThin };
+      if (n >= avgDivisor)                   return { font: f(true, 10, C.ERR_FG),  fill: bg(C.ERR_BG),  alignment: a("center", "top"), border: bThin };
+      if (n >= Math.ceil(avgDivisor / 2))    return { font: f(true, 10, C.WARN_FG), fill: bg(C.WARN_BG), alignment: a("center", "top"), border: bThin };
       return sDC(alt);
     }
 
-    // Average column
     if (c === COL_AVG) {
       const avg = avgDivisor > 0 ? row.total / avgDivisor : 0;
-      if (avg >= 5) return { font: f(true, 10, C.ERR_FG),  fill: bg(C.ERR_BG),  alignment: a("center", "top"), border: bThin };
+      if (avg >= 5)   return { font: f(true, 10, C.ERR_FG),  fill: bg(C.ERR_BG),  alignment: a("center", "top"), border: bThin };
       if (avg >= 3.5) return { font: f(true, 10, C.WARN_FG), fill: bg(C.WARN_BG), alignment: a("center", "top"), border: bThin };
       return sDCBold(alt);
     }
@@ -678,9 +702,9 @@ export function exportScheduleToExcel(input: ExportInput): void {
   });
 
   // Monthly stats always present (computed from current schedule if no history)
-  if (input.monthlyStats)   XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.monthlyStats),   "משמרות לפי עובד - חודשי");
-  if (input.quarterlyStats) XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.quarterlyStats), "משמרות לפי עובד - רבעוני");
-  if (input.yearlyStats)    XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.yearlyStats),    "משמרות לפי עובד - שנתי");
+  if (input.monthlyStats)   XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.monthlyStats,   "חודשי"),   "משמרות - חודשי");
+  if (input.quarterlyStats) XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.quarterlyStats, "רבעוני"), "משמרות - רבעוני");
+  if (input.yearlyStats)    XLSX.utils.book_append_sheet(wb, buildPeriodStatsSheet(input.yearlyStats,    "שנתי"),   "משמרות - שנתי");
 
   XLSX.utils.book_append_sheet(wb, buildStatsSheet(input.stats, periodLabel),           "נתוני עובדים");
   XLSX.utils.book_append_sheet(wb, buildValidationSheet(input.violations, periodLabel), "בדיקת תקינות");
