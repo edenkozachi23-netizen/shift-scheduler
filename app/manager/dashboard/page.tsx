@@ -91,6 +91,26 @@ function getSchedulingPeriod(): { start: string; end: string } {
   return { start: toISO(start), end: toISO(end) };
 }
 
+/** Same logic as getSchedulingPeriod but one month earlier (for "copy previous"). */
+function getPreviousPeriod(): { start: string; end: string } {
+  const toISO = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = new Date();
+  const year  = today.getFullYear();
+  const month = today.getMonth() + 1;
+  const day   = today.getDate();
+  let baseYear = year, baseMonth = month;
+  if (day < 20) { baseMonth--; if (baseMonth === 0) { baseMonth = 12; baseYear--; } }
+  // Previous period: one month earlier
+  let prevBaseMonth = baseMonth - 1, prevBaseYear = baseYear;
+  if (prevBaseMonth === 0) { prevBaseMonth = 12; prevBaseYear--; }
+  const prevBaseStart = new Date(prevBaseYear, prevBaseMonth - 1, 20);
+  const prevBaseEnd   = new Date(baseYear, baseMonth - 1, 19);
+  const start = new Date(prevBaseStart); start.setDate(start.getDate() - start.getDay());
+  const end   = new Date(prevBaseEnd);   end.setDate(end.getDate() + (6 - end.getDay()));
+  return { start: toISO(start), end: toISO(end) };
+}
+
 // ─── Engine ↔ UI schedule conversion ─────────────────────────────────────────
 
 function engineEntryToShift(entry: ScheduleEntry | undefined): Shift {
@@ -949,6 +969,7 @@ export default function ManagerDashboardPage() {
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [activeWeekTab, setActiveWeekTab] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
+  const [copyingPrev, setCopyingPrev] = useState(false);
   const [monthlyData,   setMonthlyData]   = useState<ExportPeriodStats | null>(null);
   const [quarterlyData, setQuarterlyData] = useState<ExportPeriodStats | null>(null);
   const [yearlyData,    setYearlyData]    = useState<ExportPeriodStats | null>(null);
@@ -1083,6 +1104,54 @@ export default function ManagerDashboardPage() {
     } finally {
       setGenerating(false);
     }
+  }
+
+  // Warn before closing/navigating away with unsaved edits
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => { if (isDirty) { e.preventDefault(); e.returnValue = ""; } };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
+  async function handleCopyPrevious() {
+    if (isDirty && !window.confirm("יש שינויים לא שמורים. להחליף בסידור הקודם?")) return;
+    setCopyingPrev(true);
+    try {
+      const { start: prevStart, end: prevEnd } = getPreviousPeriod();
+      const { start: curStart, end: curEnd }   = getSchedulingPeriod();
+      const res  = await fetch(`/api/schedule-entries?from=${prevStart}&to=${prevEnd}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+      const rows = json as SavedRow[];
+      if (rows.length === 0) throw new Error("לא נמצא סידור שמור לתקופה הקודמת");
+      const dayOffset  = dateDiffDays(prevStart, curStart);
+      const shifted    = rows
+        .map(r => ({ ...r, date: offsetDate(r.date, dayOffset) }))
+        .filter(r => r.date >= curStart && r.date <= curEnd);
+      const totalDays  = dateDiffDays(curStart, curEnd) + 1;
+      const uiSched: Schedule = Array.from({ length: totalDays }, (_, i) => {
+        const date    = offsetDate(curStart, i);
+        const dayRows = shifted.filter(r => r.date === date);
+        const toSlots = (p: "morning" | "evening"): Shift => {
+          const s = dayRows.filter(r => r.period === p);
+          return [
+            s[0] ? { employee: s[0].employee_id, templateId: s[0].shift_template_id } : "",
+            s[1] ? { employee: s[1].employee_id, templateId: s[1].shift_template_id } : "",
+          ];
+        };
+        return { morning: toSlots("morning"), evening: toSlots("evening") };
+      });
+      flushSync(() => {
+        setSchedule(uiSched);
+        setScheduleStartDate(curStart);
+        setScheduleEndDate(curEnd);
+        setIsDirty(true);
+        setEditMode(false);
+        setActiveWeekTab(0);
+      });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "שגיאה בטעינת סידור קודם");
+    } finally { setCopyingPrev(false); }
   }
 
   async function handleLoadSaved() {
@@ -1783,6 +1852,14 @@ export default function ManagerDashboardPage() {
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
             >
               {loadingSaved ? "טוען..." : "טען סידור שמור"}
+            </button>
+            <button
+              onClick={handleCopyPrevious}
+              disabled={copyingPrev}
+              className="px-5 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+              title="טען את הסידור הקודם כנקודת התחלה"
+            >
+              {copyingPrev ? "טוען..." : "העתק מסידור קודם"}
             </button>
             <button
               onClick={() => schedule && setEditMode((v) => !v)}

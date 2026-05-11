@@ -115,6 +115,11 @@ export default function EmployeeDashboardPage() {
   const [recurSubmitting, setRecurSubmitting] = useState(false);
   const [recurResult, setRecurResult]     = useState<string | null>(null);
 
+  // Vacation week
+  const [vacWeekDate, setVacWeekDate]     = useState("");
+  const [vacSubmitting, setVacSubmitting] = useState(false);
+  const [vacResult, setVacResult]         = useState<string | null>(null);
+
   // ── Auth ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     fetch("/api/profile")
@@ -232,6 +237,7 @@ export default function EmployeeDashboardPage() {
   async function handleDaySubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedDay || selectedDay < today) return;
+    if (deadlinePassed) { setSubmitError("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
     setSubmitting(true); setSubmitError(null);
     try {
       const res = await fetch("/api/employee-constraints", {
@@ -258,9 +264,39 @@ export default function EmployeeDashboardPage() {
     finally { setDeleteId(null); }
   }
 
+  // ── Vacation week submit ──────────────────────────────────────────────────
+  async function handleVacWeekSubmit() {
+    if (!vacWeekDate) return;
+    if (deadlinePassed) { setVacResult("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
+    setVacSubmitting(true); setVacResult(null);
+    const [vy, vm, vd] = vacWeekDate.split("-").map(Number);
+    const dt = new Date(vy, vm - 1, vd);
+    const sunday = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
+    const dates: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const day = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + i);
+      const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,"0")}-${String(day.getDate()).padStart(2,"0")}`;
+      if (iso >= today) dates.push(iso);
+    }
+    let added = 0, skipped = 0;
+    for (const dateISO of dates) {
+      const already = constraints.some(c => c.dateISO === dateISO && c.constraintType === "all-day");
+      if (already) { skipped++; continue; }
+      const res = await fetch("/api/employee-constraints", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dateISO, constraintType: "all-day", note: "חופשה" }),
+      });
+      if (res.ok) added++; else skipped++;
+    }
+    await loadConstraints();
+    setVacResult(`נוספו ${added} ימי חופשה${skipped > 0 ? ` · ${skipped} דולגו` : ""}`);
+    setVacSubmitting(false);
+  }
+
   // ── Recurring submit ───────────────────────────────────────────────────────
   async function handleRecurSubmit() {
     if (recurDays.length === 0) return;
+    if (deadlinePassed) { setRecurResult("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
     setRecurSubmitting(true); setRecurResult(null);
     const dates: string[] = [];
     const start = new Date();
@@ -287,6 +323,7 @@ export default function EmployeeDashboardPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const currentPeriod   = getSchedulingPeriod(today);
+  const deadlinePassed  = today > currentPeriod.end;
   const selectedPeriod  = selectedDay ? getSchedulingPeriod(selectedDay) : null;
   const periodCount     = selectedPeriod ? countInPeriod(constraints, selectedPeriod) : 0;
   const atPeriodLimit   = selectedPeriod !== null && periodCount >= MAX_CONSTRAINTS;
@@ -566,6 +603,10 @@ export default function EmployeeDashboardPage() {
 
               {isPastDay ? (
                 <p className="text-xs text-gray-400">לא ניתן להוסיף אילוץ לתאריך שעבר.</p>
+              ) : deadlinePassed ? (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  פג המועד להגשת אילוצים — המועד האחרון היה {currentPeriod.end.split("-").slice(1).map(Number).join("/")}
+                </p>
               ) : atPeriodLimit ? (
                 <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">הגעת למגבלת {MAX_CONSTRAINTS} אילוצים לתקופה זו.</p>
               ) : (
@@ -648,6 +689,55 @@ export default function EmployeeDashboardPage() {
             {recurResult && (
               <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                 ✓ {recurResult}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* ── Vacation week ──────────────────────────────────────────────── */}
+        <section className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100">
+            <h2 className="font-semibold text-gray-800">שבוע חופשה</h2>
+            <p className="text-xs text-gray-400 mt-0.5">הגש אילוץ &quot;כל היום&quot; לכל ימי שבוע נבחר בבת-אחת</p>
+          </div>
+          <div className="px-5 py-4 space-y-3">
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={vacWeekDate}
+                onChange={e => { setVacWeekDate(e.target.value); setVacResult(null); }}
+                min={today}
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              />
+              <button
+                onClick={handleVacWeekSubmit}
+                disabled={vacSubmitting || !vacWeekDate || deadlinePassed}
+                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+              >
+                {vacSubmitting ? "שולח..." : "הגש שבוע"}
+              </button>
+            </div>
+            {vacWeekDate && (() => {
+              const [vy, vm, vd] = vacWeekDate.split("-").map(Number);
+              const dt = new Date(vy, vm - 1, vd);
+              const sun = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
+              const sat = new Date(sun.getFullYear(), sun.getMonth(), sun.getDate() + 6);
+              return (
+                <p className="text-xs text-gray-500">
+                  שבוע: {sun.getDate()}/{sun.getMonth()+1} – {sat.getDate()}/{sat.getMonth()+1}
+                </p>
+              );
+            })()}
+            {deadlinePassed && (
+              <p className="text-xs text-red-600">פג המועד להגשת אילוצים לתקופה הנוכחית.</p>
+            )}
+            {vacResult && (
+              <p className={`text-sm rounded-lg px-3 py-2 border ${
+                vacResult.startsWith("נוספו")
+                  ? "text-green-700 bg-green-50 border-green-200"
+                  : "text-red-700 bg-red-50 border-red-200"
+              }`}>
+                {vacResult.startsWith("נוספו") ? "✓ " : ""}{vacResult}
               </p>
             )}
           </div>
