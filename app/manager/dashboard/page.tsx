@@ -56,20 +56,28 @@ function formatDateShort(dateStr: string): string {
   return `${parseInt(day)}/${parseInt(month)}`;
 }
 
-/** Returns the upcoming Sun–Sat week as the active schedule period.
- *  If today is Sunday the period is this week (today → +6 days).
- *  If today is Mon–Sat the period is the NEXT Sun–Sat week. */
+/** Returns the monthly scheduling period: 20th of last month → 19th of this month
+ *  (or 20th of this month → 19th of next month when today ≥ 20). */
 function getSchedulingPeriod(): { start: string; end: string } {
-  const toISO = (d: Date) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const today = new Date();
-  const dow   = today.getDay(); // 0=Sun … 6=Sat
-  const daysToSunday = (7 - dow) % 7; // 0 when today is Sun
-  const start = new Date(today);
-  start.setDate(today.getDate() + daysToSunday);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6);
-  return { start: toISO(start), end: toISO(end) };
+  const year  = today.getFullYear();
+  const month = today.getMonth() + 1;
+  const day   = today.getDate();
+  if (day >= 20) {
+    const nm = month === 12 ? 1 : month + 1;
+    const ny = month === 12 ? year + 1 : year;
+    return {
+      start: `${year}-${String(month).padStart(2, "0")}-20`,
+      end:   `${ny}-${String(nm).padStart(2, "0")}-19`,
+    };
+  } else {
+    const pm = month === 1 ? 12 : month - 1;
+    const py = month === 1 ? year - 1 : year;
+    return {
+      start: `${py}-${String(pm).padStart(2, "0")}-20`,
+      end:   `${year}-${String(month).padStart(2, "0")}-19`,
+    };
+  }
 }
 
 // ─── Engine ↔ UI schedule conversion ─────────────────────────────────────────
@@ -1975,15 +1983,17 @@ export default function ManagerDashboardPage() {
         {/* Monthly Schedule — 4 weekly tabs */}
         {schedule && scheduleStartDate && (() => {
           const totalDays = schedule.length;
-          // Align display to Sunday: prepend empty cols for days before period start
+          // Pad both ends so every week tab is a full Sun–Sat (no half-weeks)
           const [sy, sm, sd] = scheduleStartDate.split("-").map(Number);
-          const startDow = new Date(sy, sm - 1, sd).getDay(); // 0=Sun … 6=Sat
-          const leadingEmpty = startDow;
-          const totalDisplay = leadingEmpty + totalDays;
+          const startDow   = new Date(sy, sm - 1, sd).getDay(); // 0=Sun … 6=Sat
+          const leadingEmpty  = startDow;
+          const rawDisplay    = leadingEmpty + totalDays;
+          const trailingEmpty = (7 - (rawDisplay % 7)) % 7; // pad last week to full 7
+          const totalDisplay  = rawDisplay + trailingEmpty;
 
           const weekChunks: { dStart: number; dEnd: number }[] = [];
           for (let s = 0; s < totalDisplay; s += 7) {
-            weekChunks.push({ dStart: s, dEnd: Math.min(s + 7, totalDisplay) });
+            weekChunks.push({ dStart: s, dEnd: s + 7 });
           }
 
           const safeTab = Math.min(activeWeekTab, weekChunks.length - 1);
@@ -1999,7 +2009,7 @@ export default function ManagerDashboardPage() {
             const date = offsetDate(scheduleStartDate, offset);
             const [dy2, dm2, dd2] = date.split("-").map(Number);
             const dow = new Date(dy2, dm2 - 1, dd2).getDay();
-            if (offset < 0) {
+            if (offset < 0 || offset >= totalDays) {
               tabCols.push({ isEmpty: true, date, dow });
             } else {
               tabCols.push({ isEmpty: false, date, dow, dayIdx: offset, day: schedule[offset] });
