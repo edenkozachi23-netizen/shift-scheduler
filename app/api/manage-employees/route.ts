@@ -25,12 +25,15 @@ export async function PATCH(request: Request) {
   if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   if (user.user_metadata?.role !== "manager") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
-  const body = (await request.json()) as { id: string; is_active?: boolean; role?: string };
-  const { id, is_active, role } = body;
+  const body = (await request.json()) as { id: string; is_active?: boolean; role?: string; name?: string };
+  const { id, is_active, role, name } = body;
 
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
-  if (is_active === undefined && role === undefined) {
-    return NextResponse.json({ error: "Must provide is_active or role" }, { status: 400 });
+  if (is_active === undefined && role === undefined && name === undefined) {
+    return NextResponse.json({ error: "Must provide is_active, role, or name" }, { status: 400 });
+  }
+  if (name !== undefined && name.trim().length === 0) {
+    return NextResponse.json({ error: "Name cannot be empty" }, { status: 400 });
   }
 
   if (role !== undefined && id === user.id) {
@@ -57,6 +60,7 @@ export async function PATCH(request: Request) {
   const updateFields: Record<string, unknown> = {};
   if (is_active !== undefined) updateFields.is_active = is_active;
   if (role !== undefined) updateFields.role = role;
+  if (name !== undefined) updateFields.name = name.trim();
 
   const { error } = await supabase.from("users").update(updateFields).eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

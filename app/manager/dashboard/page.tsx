@@ -842,6 +842,8 @@ export default function ManagerDashboardPage() {
   const [managedLoading, setManagedLoading] = useState(false);
   const [managedError, setManagedError]   = useState<string | null>(null);
   const [togglingUser, setTogglingUser]   = useState<string | null>(null);
+  const [renamingUser, setRenamingUser]   = useState<string | null>(null);
+  const [renameValue,  setRenameValue]    = useState("");
 
   // ── Publish schedule ──────────────────────────────────────────────────────
   const [publishing, setPublishing]       = useState(false);
@@ -1354,6 +1356,29 @@ export default function ManagerDashboardPage() {
       setManagedUsers((prev) =>
         prev.map((u) => u.id === userId ? { ...u, is_active: !currentActive } : u)
       );
+      fetch("/api/employees").then((r) => r.ok ? r.json() : []).then((names: string[]) => { if (names.length > 0) setEmployees(names); }).catch(() => undefined);
+    } finally {
+      setTogglingUser(null);
+    }
+  }
+
+  async function handleRenameUser(userId: string) {
+    const newName = renameValue.trim();
+    if (!newName) return;
+    setTogglingUser(userId);
+    setManagedError(null);
+    try {
+      const res = await fetch("/api/manage-employees", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: userId, name: newName }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setManagedError(json.error ?? `HTTP ${res.status}`); return; }
+      setManagedUsers((prev) =>
+        prev.map((u) => u.id === userId ? { ...u, name: newName } : u)
+      );
+      setRenamingUser(null);
       fetch("/api/employees").then((r) => r.ok ? r.json() : []).then((names: string[]) => { if (names.length > 0) setEmployees(names); }).catch(() => undefined);
     } finally {
       setTogglingUser(null);
@@ -2426,7 +2451,38 @@ export default function ManagerDashboardPage() {
                         key={u.id}
                         className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? "bg-white" : "bg-gray-50"}`}
                       >
-                        <td className="px-4 py-3 font-medium text-gray-800">{u.name || "—"}</td>
+                        <td className="px-4 py-3 font-medium text-gray-800">
+                          {renamingUser === u.id ? (
+                            <form
+                              onSubmit={(e) => { e.preventDefault(); void handleRenameUser(u.id); }}
+                              className="flex gap-1 items-center"
+                            >
+                              <input
+                                autoFocus
+                                value={renameValue}
+                                onChange={(e) => setRenameValue(e.target.value)}
+                                onKeyDown={(e) => e.key === "Escape" && setRenamingUser(null)}
+                                className="border border-blue-300 rounded px-2 py-0.5 text-sm w-32 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                              <button
+                                type="submit"
+                                disabled={togglingUser === u.id || !renameValue.trim()}
+                                className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                שמור
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setRenamingUser(null)}
+                                className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded hover:bg-gray-200"
+                              >
+                                ביטול
+                              </button>
+                            </form>
+                          ) : (
+                            u.name || "—"
+                          )}
+                        </td>
                         <td className="px-3 py-3 text-center">
                           <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
                             u.role === "manager"
@@ -2444,7 +2500,14 @@ export default function ManagerDashboardPage() {
                           </span>
                         </td>
                         <td className="px-3 py-3 text-center">
-                          <div className="flex gap-2 justify-center">
+                          <div className="flex gap-2 justify-center flex-wrap">
+                            <button
+                              onClick={() => { setRenamingUser(u.id); setRenameValue(u.name ?? ""); }}
+                              disabled={togglingUser === u.id}
+                              className="px-3 py-1 text-xs font-medium rounded-lg border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100 transition-colors disabled:opacity-50"
+                            >
+                              שנה שם
+                            </button>
                             <button
                               onClick={() => void handleToggleActive(u.id, u.is_active)}
                               disabled={togglingUser === u.id}
