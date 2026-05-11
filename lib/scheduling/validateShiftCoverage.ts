@@ -31,12 +31,14 @@ export function validateShiftCoverage(schedule: ScheduleEntry[]): CoverageResult
       (endTime) => !eveningStartTimes.includes(endTime)
     );
 
+    const hasStaff = morningEndTimes.length > 0 && eveningStartTimes.length > 0;
+
     return {
       date,
-      valid: missingCoverage.length === 0,
+      valid: hasStaff && missingCoverage.length === 0,
       morningEndTimes,
       eveningStartTimes,
-      missingCoverage,
+      missingCoverage: hasStaff ? missingCoverage : ["חסרה משמרת בוקר או ערב"],
     };
   });
 
