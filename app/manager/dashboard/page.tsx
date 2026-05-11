@@ -1973,27 +1973,44 @@ export default function ManagerDashboardPage() {
         {/* Monthly Schedule — 4 weekly tabs */}
         {schedule && scheduleStartDate && (() => {
           const totalDays = schedule.length;
-          // Split by real Sun–Sat weeks: a new chunk starts every Sunday
-          const weekChunks: { start: number; end: number }[] = [];
-          let chunkStart = 0;
-          for (let i = 1; i < totalDays; i++) {
-            const d = offsetDate(scheduleStartDate, i);
-            const [dy, dm, dd] = d.split("-").map(Number);
-            if (new Date(dy, dm - 1, dd).getDay() === 0) { // Sunday
-              weekChunks.push({ start: chunkStart, end: i });
-              chunkStart = i;
-            }
+          // Align display to Sunday: prepend empty cols for days before period start
+          const [sy, sm, sd] = scheduleStartDate.split("-").map(Number);
+          const startDow = new Date(sy, sm - 1, sd).getDay(); // 0=Sun … 6=Sat
+          const leadingEmpty = startDow;
+          const totalDisplay = leadingEmpty + totalDays;
+
+          const weekChunks: { dStart: number; dEnd: number }[] = [];
+          for (let s = 0; s < totalDisplay; s += 7) {
+            weekChunks.push({ dStart: s, dEnd: Math.min(s + 7, totalDisplay) });
           }
-          weekChunks.push({ start: chunkStart, end: totalDays });
 
           const safeTab = Math.min(activeWeekTab, weekChunks.length - 1);
-          const { start: tabStart, end: tabEnd } = weekChunks[safeTab];
-          const tabSchedule = schedule.slice(tabStart, tabEnd);
+          const { dStart: tabDStart, dEnd: tabDEnd } = weekChunks[safeTab];
 
-          const tabLabel = (c: { start: number; end: number }) => {
-            const from = formatDateShort(offsetDate(scheduleStartDate, c.start));
-            const to   = formatDateShort(offsetDate(scheduleStartDate, c.end - 1));
-            return `${from} – ${to}`;
+          type ColInfo =
+            | { isEmpty: true;  date: string; dow: number }
+            | { isEmpty: false; date: string; dow: number; dayIdx: number; day: (typeof schedule)[0] };
+
+          const tabCols: ColInfo[] = [];
+          for (let di = tabDStart; di < tabDEnd; di++) {
+            const offset = di - leadingEmpty;
+            const date = offsetDate(scheduleStartDate, offset);
+            const [dy2, dm2, dd2] = date.split("-").map(Number);
+            const dow = new Date(dy2, dm2 - 1, dd2).getDay();
+            if (offset < 0) {
+              tabCols.push({ isEmpty: true, date, dow });
+            } else {
+              tabCols.push({ isEmpty: false, date, dow, dayIdx: offset, day: schedule[offset] });
+            }
+          }
+
+          const tabLabel = (c: { dStart: number; dEnd: number }) => {
+            const firstOff = Math.max(0, c.dStart - leadingEmpty);
+            const lastOff  = Math.min(totalDays - 1, c.dEnd - leadingEmpty - 1);
+            if (firstOff > totalDays - 1) return "—";
+            const from = formatDateShort(offsetDate(scheduleStartDate, firstOff));
+            const to   = formatDateShort(offsetDate(scheduleStartDate, lastOff));
+            return from === to ? from : `${from} – ${to}`;
           };
 
           return (
@@ -2043,24 +2060,19 @@ export default function ManagerDashboardPage() {
                       <th className="w-14 bg-gray-800 text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600">
                         משמרת
                       </th>
-                      {tabSchedule.map((_, di) => {
-                        const date = offsetDate(scheduleStartDate, tabStart + di);
-                        const [dy, dm, dd] = date.split("-").map(Number);
-                        const dow = new Date(dy, dm - 1, dd).getDay();
-                        const isFri = dow === 5;
-                        const isSat = dow === 6;
-                        return (
-                          <th
-                            key={di}
-                            className={`text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600 ${
-                              isSat ? "bg-gray-600" : isFri ? "bg-gray-700" : "bg-gray-800"
-                            }`}
-                          >
-                            <div>{DAYS[dow]}</div>
-                            <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(date)}</div>
-                          </th>
-                        );
-                      })}
+                      {tabCols.map((col, ci) => (
+                        <th
+                          key={ci}
+                          className={`text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600 ${
+                            col.isEmpty
+                              ? "bg-gray-900 opacity-30"
+                              : col.dow === 6 ? "bg-gray-600" : col.dow === 5 ? "bg-gray-700" : "bg-gray-800"
+                          }`}
+                        >
+                          <div>{DAYS[col.dow]}</div>
+                          <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(col.date)}</div>
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -2071,16 +2083,15 @@ export default function ManagerDashboardPage() {
                         }`}>
                           {period === "morning" ? "בוקר" : "ערב"}
                         </td>
-                        {tabSchedule.map((day, di) => {
-                          const absIdx = tabStart + di;
-                          const date = offsetDate(scheduleStartDate, absIdx);
+                        {tabCols.map((col, ci) => {
+                          if (col.isEmpty) {
+                            return <td key={ci} className="border-l border-gray-100 bg-gray-100 opacity-40 min-w-[80px]" />;
+                          }
+                          const { date, dayIdx, day } = col;
                           const slots = day[period];
                           const filled = slots.filter(slotFilled).length;
                           return (
-                            <td
-                              key={di}
-                              className={`px-2 py-2 border-l border-gray-100 align-top ${shiftBg(filled)}`}
-                            >
+                            <td key={ci} className={`px-2 py-2 border-l border-gray-100 align-top ${shiftBg(filled)}`}>
                               <div className="space-y-1.5 min-h-[52px]">
                                 <SlotCell
                                   value={slots[0]}
@@ -2089,7 +2100,7 @@ export default function ManagerDashboardPage() {
                                   excludeEmployee={slots[1] !== "" ? slots[1].employee : undefined}
                                   employeeList={employees}
                                   violationReasons={getSlotViolations(date, period, slots[0])}
-                                  onChange={(v) => updateSlot(absIdx, period, 0, v)}
+                                  onChange={(v) => updateSlot(dayIdx, period, 0, v)}
                                 />
                                 <SlotCell
                                   value={slots[1]}
@@ -2098,7 +2109,7 @@ export default function ManagerDashboardPage() {
                                   excludeEmployee={slots[0] !== "" ? slots[0].employee : undefined}
                                   employeeList={employees}
                                   violationReasons={getSlotViolations(date, period, slots[1])}
-                                  onChange={(v) => updateSlot(absIdx, period, 1, v)}
+                                  onChange={(v) => updateSlot(dayIdx, period, 1, v)}
                                 />
                                 {filled < 2 && (
                                   <div className="text-xs text-red-500 font-semibold pt-0.5">
@@ -2116,11 +2127,13 @@ export default function ManagerDashboardPage() {
                         <td className="text-xs font-bold text-gray-500 text-center px-2 py-2 bg-gray-100">
                           מעבר
                         </td>
-                        {tabSchedule.map((_, di) => {
-                          const date = offsetDate(scheduleStartDate, tabStart + di);
-                          const covDay = coverage.days.find((d) => d.date === date);
+                        {tabCols.map((col, ci) => {
+                          if (col.isEmpty) {
+                            return <td key={ci} className="border-l border-gray-100 px-2 py-2 bg-gray-100 opacity-40" />;
+                          }
+                          const covDay = coverage.days.find((d) => d.date === col.date);
                           return (
-                            <td key={di} className="border-l border-gray-100 px-2 py-2 text-center">
+                            <td key={ci} className="border-l border-gray-100 px-2 py-2 text-center">
                               {covDay && (
                                 covDay.valid
                                   ? <span className="text-xs text-green-600 font-medium">✓</span>
