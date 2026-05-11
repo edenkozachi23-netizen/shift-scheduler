@@ -917,6 +917,7 @@ export default function ManagerDashboardPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  const [activeWeekTab, setActiveWeekTab] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [monthlyData,   setMonthlyData]   = useState<ExportPeriodStats | null>(null);
   const [quarterlyData, setQuarterlyData] = useState<ExportPeriodStats | null>(null);
@@ -976,6 +977,7 @@ export default function ManagerDashboardPage() {
       setScheduleEndDate(endDate);
       setEditMode(true);
       setIsDirty(false);
+      setActiveWeekTab(0);
     });
     console.log("[GEN] Phase 1 flushed — grid should be visible now");
 
@@ -1882,128 +1884,167 @@ export default function ManagerDashboardPage() {
           )}
         </section>
 
-        {/* Monthly Schedule */}
-        {schedule && scheduleStartDate && (
-          <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <h2 className="text-xl font-semibold text-gray-700">סידור עבודה חודשי</h2>
-              <div className="flex items-center gap-3">
-                <span className="text-sm text-gray-400">
-                  {formatDateShort(scheduleStartDate)} – {formatDateShort(scheduleEndDate ?? offsetDate(scheduleStartDate, schedule ? schedule.length - 1 : 6))}
-                </span>
-                {coverage && (
-                  <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
-                    coverage.valid
-                      ? "bg-green-50 border-green-200 text-green-700"
-                      : "bg-red-50 border-red-200 text-red-600"
-                  }`}>
-                    {coverage.valid
-                      ? "✓ כל המעברים תקינים"
-                      : `✗ ${coverage.days.filter((d) => !d.valid).length} ימים עם בעיית מעבר`}
-                  </span>
-                )}
-              </div>
-            </div>
+        {/* Monthly Schedule — 4 weekly tabs */}
+        {schedule && scheduleStartDate && (() => {
+          const totalDays = schedule.length;
+          const weekChunks = [
+            { start: 0,  end: Math.min(7,  totalDays) },
+            { start: 7,  end: Math.min(14, totalDays) },
+            { start: 14, end: Math.min(21, totalDays) },
+            { start: 21, end: totalDays },
+          ].filter((c) => c.start < totalDays);
 
-            <div className="overflow-x-auto rounded-xl border border-gray-200">
-              <table className="w-full border-collapse min-w-[700px]">
-                <thead>
-                  <tr>
-                    <th className="w-14 bg-gray-800 text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600">
-                      משמרת
-                    </th>
-                    {schedule.map((_, di) => {
-                      const date = offsetDate(scheduleStartDate, di);
-                      const [dy, dm, dd] = date.split("-").map(Number);
-                      const dow = new Date(dy, dm - 1, dd).getDay();
-                      const isFri = dow === 5;
-                      const isSat = dow === 6;
-                      return (
-                        <th
-                          key={di}
-                          className={`text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600 ${
-                            isSat ? "bg-gray-600" : isFri ? "bg-gray-700" : "bg-gray-800"
-                          }`}
-                        >
-                          <div>{DAYS[dow]}</div>
-                          <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(date)}</div>
-                        </th>
-                      );
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(["morning", "evening"] as const).map((period) => (
-                    <tr key={period} className="border-b-2 border-gray-200">
-                      <td className={`text-white text-xs font-bold text-center px-2 py-3 ${
-                        period === "morning" ? "bg-sky-600" : "bg-indigo-600"
-                      }`}>
-                        {period === "morning" ? "בוקר" : "ערב"}
-                      </td>
-                      {schedule.map((day, di) => {
-                        const date = offsetDate(scheduleStartDate, di);
-                        const slots = day[period];
-                        const filled = slots.filter(slotFilled).length;
-                        return (
-                          <td
-                            key={di}
-                            className={`px-2 py-2 border-l border-gray-100 align-top ${shiftBg(filled)}`}
-                          >
-                            <div className="space-y-1.5 min-h-[52px]">
-                              <SlotCell
-                                value={slots[0]}
-                                period={period}
-                                editMode={editMode}
-                                excludeEmployee={slots[1] !== "" ? slots[1].employee : undefined}
-                                employeeList={employees}
-                                violationReasons={getSlotViolations(date, period, slots[0])}
-                                onChange={(v) => updateSlot(di, period, 0, v)}
-                              />
-                              <SlotCell
-                                value={slots[1]}
-                                period={period}
-                                editMode={editMode}
-                                excludeEmployee={slots[0] !== "" ? slots[0].employee : undefined}
-                                employeeList={employees}
-                                violationReasons={getSlotViolations(date, period, slots[1])}
-                                onChange={(v) => updateSlot(di, period, 1, v)}
-                              />
-                              {filled < 2 && (
-                                <div className="text-xs text-red-500 font-semibold pt-0.5">
-                                  {filled === 0 ? "חסרים 2" : "חסר 1"}
-                                </div>
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
+          const safeTab = Math.min(activeWeekTab, weekChunks.length - 1);
+          const { start: tabStart, end: tabEnd } = weekChunks[safeTab];
+          const tabSchedule = schedule.slice(tabStart, tabEnd);
+
+          const tabLabel = (c: { start: number; end: number }) => {
+            const from = formatDateShort(offsetDate(scheduleStartDate, c.start));
+            const to   = formatDateShort(offsetDate(scheduleStartDate, c.end - 1));
+            return `${from} – ${to}`;
+          };
+
+          return (
+            <section className="bg-white rounded-2xl shadow-md p-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h2 className="text-xl font-semibold text-gray-700">סידור עבודה חודשי</h2>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-gray-400">
+                    {formatDateShort(scheduleStartDate)} – {formatDateShort(scheduleEndDate ?? offsetDate(scheduleStartDate, totalDays - 1))}
+                  </span>
                   {coverage && (
-                    <tr className="bg-gray-50">
-                      <td className="text-xs font-bold text-gray-500 text-center px-2 py-2 bg-gray-100">
-                        מעבר
-                      </td>
-                      {schedule.map((_, di) => {
-                        const date = offsetDate(scheduleStartDate, di);
-                        const covDay = coverage.days.find((d) => d.date === date);
+                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full border ${
+                      coverage.valid
+                        ? "bg-green-50 border-green-200 text-green-700"
+                        : "bg-red-50 border-red-200 text-red-600"
+                    }`}>
+                      {coverage.valid
+                        ? "✓ כל המעברים תקינים"
+                        : `✗ ${coverage.days.filter((d) => !d.valid).length} ימים עם בעיית מעבר`}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Week tabs */}
+              <div className="flex gap-1 border-b border-gray-200 pb-0">
+                {weekChunks.map((chunk, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setActiveWeekTab(i)}
+                    className={`px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors ${
+                      safeTab === i
+                        ? "border-blue-500 text-blue-600 bg-blue-50"
+                        : "border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50"
+                    }`}
+                  >
+                    שבוע {i + 1}
+                    <span className="block text-xs font-normal text-gray-400">{tabLabel(chunk)}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-gray-200">
+                <table className="w-full border-collapse min-w-[700px]">
+                  <thead>
+                    <tr>
+                      <th className="w-14 bg-gray-800 text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600">
+                        משמרת
+                      </th>
+                      {tabSchedule.map((_, di) => {
+                        const date = offsetDate(scheduleStartDate, tabStart + di);
+                        const [dy, dm, dd] = date.split("-").map(Number);
+                        const dow = new Date(dy, dm - 1, dd).getDay();
+                        const isFri = dow === 5;
+                        const isSat = dow === 6;
                         return (
-                          <td key={di} className="border-l border-gray-100 px-2 py-2 text-center">
-                            {covDay && (
-                              covDay.valid
-                                ? <span className="text-xs text-green-600 font-medium">✓</span>
-                                : <span className="text-xs text-red-500 font-medium">{covDay.missingCoverage.join(", ")}</span>
-                            )}
-                          </td>
+                          <th
+                            key={di}
+                            className={`text-white text-xs font-semibold px-2 py-3 text-center border-l border-gray-600 ${
+                              isSat ? "bg-gray-600" : isFri ? "bg-gray-700" : "bg-gray-800"
+                            }`}
+                          >
+                            <div>{DAYS[dow]}</div>
+                            <div className="font-normal text-gray-300 mt-0.5">{formatDateShort(date)}</div>
+                          </th>
                         );
                       })}
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
+                  </thead>
+                  <tbody>
+                    {(["morning", "evening"] as const).map((period) => (
+                      <tr key={period} className="border-b-2 border-gray-200">
+                        <td className={`text-white text-xs font-bold text-center px-2 py-3 ${
+                          period === "morning" ? "bg-sky-600" : "bg-indigo-600"
+                        }`}>
+                          {period === "morning" ? "בוקר" : "ערב"}
+                        </td>
+                        {tabSchedule.map((day, di) => {
+                          const absIdx = tabStart + di;
+                          const date = offsetDate(scheduleStartDate, absIdx);
+                          const slots = day[period];
+                          const filled = slots.filter(slotFilled).length;
+                          return (
+                            <td
+                              key={di}
+                              className={`px-2 py-2 border-l border-gray-100 align-top ${shiftBg(filled)}`}
+                            >
+                              <div className="space-y-1.5 min-h-[52px]">
+                                <SlotCell
+                                  value={slots[0]}
+                                  period={period}
+                                  editMode={editMode}
+                                  excludeEmployee={slots[1] !== "" ? slots[1].employee : undefined}
+                                  employeeList={employees}
+                                  violationReasons={getSlotViolations(date, period, slots[0])}
+                                  onChange={(v) => updateSlot(absIdx, period, 0, v)}
+                                />
+                                <SlotCell
+                                  value={slots[1]}
+                                  period={period}
+                                  editMode={editMode}
+                                  excludeEmployee={slots[0] !== "" ? slots[0].employee : undefined}
+                                  employeeList={employees}
+                                  violationReasons={getSlotViolations(date, period, slots[1])}
+                                  onChange={(v) => updateSlot(absIdx, period, 1, v)}
+                                />
+                                {filled < 2 && (
+                                  <div className="text-xs text-red-500 font-semibold pt-0.5">
+                                    {filled === 0 ? "חסרים 2" : "חסר 1"}
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                    {coverage && (
+                      <tr className="bg-gray-50">
+                        <td className="text-xs font-bold text-gray-500 text-center px-2 py-2 bg-gray-100">
+                          מעבר
+                        </td>
+                        {tabSchedule.map((_, di) => {
+                          const date = offsetDate(scheduleStartDate, tabStart + di);
+                          const covDay = coverage.days.find((d) => d.date === date);
+                          return (
+                            <td key={di} className="border-l border-gray-100 px-2 py-2 text-center">
+                              {covDay && (
+                                covDay.valid
+                                  ? <span className="text-xs text-green-600 font-medium">✓</span>
+                                  : <span className="text-xs text-red-500 font-medium">{covDay.missingCoverage.join(", ")}</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          );
+        })()}
 
         {/* Live Rule Validation */}
         {scheduleValidation && (
