@@ -278,11 +278,11 @@ function fmtPeriod(s1: ExportSlot, s2: ExportSlot): string {
 //  Row 4  [סטטוס | ✓ תקין     | ✓ תקין     | ...           ]
 
 function buildScheduleSheet(days: ExportDay[], periodLabel: string): XLSX.WorkSheet {
-  const NC = 8; // label col + 7 day cols
+  const NC = days.length + 1; // label col + N day cols
 
   const ws = XLSX.utils.aoa_to_sheet([
     // Row 0 — title
-    [`סידור עבודה שבועי  ·  ${periodLabel}`, ...Array(NC - 1).fill("")],
+    [`סידור עבודה  ·  ${periodLabel}`, ...Array(NC - 1).fill("")],
     // Row 1 — day headers
     ["משמרת", ...days.map((d) => `${d.dayName}\n${d.date}`)],
     // Row 2 — morning
@@ -298,8 +298,7 @@ function buildScheduleSheet(days: ExportDay[], periodLabel: string): XLSX.WorkSh
 
   ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: NC - 1 } }];
 
-  // Label col narrow, day cols wide enough for 2 lines of employee+time
-  setColWidths(ws, [10, 22, 22, 22, 22, 22, 22, 22]);
+  setColWidths(ws, [10, ...Array(days.length).fill(22)]);
   setRowHeights(ws, [
     30,   // title
     28,   // day headers (day name + date, 2 lines)
@@ -312,9 +311,9 @@ function buildScheduleSheet(days: ExportDay[], periodLabel: string): XLSX.WorkSh
   applyStyles(ws, (r, c) => {
     if (r === 0) return S_TITLE;
 
-    const dayIdx = c - 1;             // 0–6 for cols 1–7
-    const isFri  = dayIdx === 5;
-    const isSat  = dayIdx === 6;
+    const dayIdx = c - 1;
+    const isFri  = dayIdx >= 0 && days[dayIdx]?.dayName === "שישי";
+    const isSat  = dayIdx >= 0 && days[dayIdx]?.dayName === "שבת";
 
     // ── Row 1: day-name headers ──────────────────────────────────────────────
     if (r === 1) {
@@ -660,7 +659,24 @@ export function exportScheduleToExcel(input: ExportInput): void {
   const { periodLabel } = input;
   const wb = XLSX.utils.book_new();
 
-  XLSX.utils.book_append_sheet(wb, buildScheduleSheet(input.days, periodLabel),         "סידור שבועי");
+  // Split the full period into 4 weekly chunks and create a tab for each
+  const total = input.days.length;
+  const chunks = [
+    { start: 0,  end: Math.min(7,  total) },
+    { start: 7,  end: Math.min(14, total) },
+    { start: 14, end: Math.min(21, total) },
+    { start: 21, end: total },
+  ].filter((c) => c.start < total);
+
+  chunks.forEach((chunk, i) => {
+    const weekDays = input.days.slice(chunk.start, chunk.end);
+    const from = weekDays[0].date;
+    const to   = weekDays[weekDays.length - 1].date;
+    const sheetName = `שבוע ${i + 1} (${from}–${to})`;
+    const weekLabel = `שבוע ${i + 1}  ·  ${from} – ${to}`;
+    XLSX.utils.book_append_sheet(wb, buildScheduleSheet(weekDays, weekLabel), sheetName);
+  });
+
   XLSX.utils.book_append_sheet(wb, buildStatsSheet(input.stats, periodLabel),           "נתוני עובדים");
   XLSX.utils.book_append_sheet(wb, buildValidationSheet(input.violations, periodLabel), "בדיקת תקינות");
   XLSX.utils.book_append_sheet(wb, buildShortagesSheet(input.shortages, periodLabel),   "חוסרים");
