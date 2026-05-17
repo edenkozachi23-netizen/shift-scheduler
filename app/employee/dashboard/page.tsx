@@ -52,21 +52,22 @@ function isoPlus(iso: string, days: number): string {
 
 type SchedulingPeriod = { start: string; end: string; label: string };
 
-/** Returns the monthly constraint-submission window.
- *  20th of last month → 10th of this month  (or 20th → 10th of next month when day ≥ 20). */
+/** Returns the active constraint-submission window.
+ *  day 1–10:  20th of last month → 10th of this month  (window still open)
+ *  day 11–31: 20th of this month → 10th of next month  (prepare for next period) */
 function getSchedulingPeriod(isoDate: string): SchedulingPeriod {
   const [year, month, day] = isoDate.split("-").map(Number);
   let start: string, end: string;
-  if (day >= 20) {
-    const nm = month === 12 ? 1 : month + 1;
-    const ny = month === 12 ? year + 1 : year;
-    start = `${year}-${String(month).padStart(2, "0")}-20`;
-    end   = `${ny}-${String(nm).padStart(2, "0")}-10`;
-  } else {
+  if (day <= 10) {
     const pm = month === 1 ? 12 : month - 1;
     const py = month === 1 ? year - 1 : year;
     start = `${py}-${String(pm).padStart(2, "0")}-20`;
     end   = `${year}-${String(month).padStart(2, "0")}-10`;
+  } else {
+    const nm = month === 12 ? 1 : month + 1;
+    const ny = month === 12 ? year + 1 : year;
+    start = `${year}-${String(month).padStart(2, "0")}-20`;
+    end   = `${ny}-${String(nm).padStart(2, "0")}-10`;
   }
   const fmt = (s: string) => { const [,m,d] = s.split("-").map(Number); return `${d}/${m}`; };
   return { start, end, label: `${fmt(start)} – ${fmt(end)}` };
@@ -114,11 +115,6 @@ export default function EmployeeDashboardPage() {
   const [recurType, setRecurType]         = useState<ConstraintType>("all-day");
   const [recurSubmitting, setRecurSubmitting] = useState(false);
   const [recurResult, setRecurResult]     = useState<string | null>(null);
-
-  // Vacation week
-  const [vacWeekDate, setVacWeekDate]     = useState("");
-  const [vacSubmitting, setVacSubmitting] = useState(false);
-  const [vacResult, setVacResult]         = useState<string | null>(null);
 
   // ── Auth ───────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -237,7 +233,6 @@ export default function EmployeeDashboardPage() {
   async function handleDaySubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedDay || selectedDay < today) return;
-    if (deadlinePassed) { setSubmitError("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
     setSubmitting(true); setSubmitError(null);
     try {
       const res = await fetch("/api/employee-constraints", {
@@ -264,39 +259,9 @@ export default function EmployeeDashboardPage() {
     finally { setDeleteId(null); }
   }
 
-  // ── Vacation week submit ──────────────────────────────────────────────────
-  async function handleVacWeekSubmit() {
-    if (!vacWeekDate) return;
-    if (deadlinePassed) { setVacResult("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
-    setVacSubmitting(true); setVacResult(null);
-    const [vy, vm, vd] = vacWeekDate.split("-").map(Number);
-    const dt = new Date(vy, vm - 1, vd);
-    const sunday = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
-    const dates: string[] = [];
-    for (let i = 0; i < 7; i++) {
-      const day = new Date(sunday.getFullYear(), sunday.getMonth(), sunday.getDate() + i);
-      const iso = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,"0")}-${String(day.getDate()).padStart(2,"0")}`;
-      if (iso >= today) dates.push(iso);
-    }
-    let added = 0, skipped = 0;
-    for (const dateISO of dates) {
-      const already = constraints.some(c => c.dateISO === dateISO && c.constraintType === "all-day");
-      if (already) { skipped++; continue; }
-      const res = await fetch("/api/employee-constraints", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dateISO, constraintType: "all-day", note: "חופשה" }),
-      });
-      if (res.ok) added++; else skipped++;
-    }
-    await loadConstraints();
-    setVacResult(`נוספו ${added} ימי חופשה${skipped > 0 ? ` · ${skipped} דולגו` : ""}`);
-    setVacSubmitting(false);
-  }
-
   // ── Recurring submit ───────────────────────────────────────────────────────
   async function handleRecurSubmit() {
     if (recurDays.length === 0) return;
-    if (deadlinePassed) { setRecurResult("פג המועד להגשת אילוצים לתקופה הנוכחית"); return; }
     setRecurSubmitting(true); setRecurResult(null);
     const dates: string[] = [];
     const start = new Date();
@@ -323,7 +288,6 @@ export default function EmployeeDashboardPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const currentPeriod   = getSchedulingPeriod(today);
-  const deadlinePassed  = today > currentPeriod.end;
   const selectedPeriod  = selectedDay ? getSchedulingPeriod(selectedDay) : null;
   const periodCount     = selectedPeriod ? countInPeriod(constraints, selectedPeriod) : 0;
   const atPeriodLimit   = selectedPeriod !== null && periodCount >= MAX_CONSTRAINTS;
@@ -470,41 +434,22 @@ export default function EmployeeDashboardPage() {
         <section className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100 space-y-2">
             <h2 className="font-semibold text-gray-800">הגשת אילוץ</h2>
-            {/* Deadline banner */}
+            {/* Period info */}
             {(() => {
-              const [ey, em, ed] = currentPeriod.end.split("-").map(Number);
-              const [ty, tm, td] = today.split("-").map(Number);
-              const daysLeft = Math.ceil((new Date(ey, em-1, ed).getTime() - new Date(ty, tm-1, td).getTime()) / 86400000);
               const periodUsed = countInPeriod(constraints, currentPeriod);
               const remaining  = MAX_CONSTRAINTS - periodUsed;
-              const urgentDeadline = daysLeft <= 3;
               return (
-                <div className={`rounded-lg px-3 py-2 text-xs border flex flex-col gap-1 ${
-                  urgentDeadline
-                    ? "bg-red-50 border-red-200 text-red-800"
-                    : "bg-blue-50 border-blue-200 text-blue-800"
-                }`}>
+                <div className="rounded-lg px-3 py-2 text-xs border flex flex-col gap-1 bg-blue-50 border-blue-200 text-blue-800">
                   <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="font-semibold">
-                      תקופה: {currentPeriod.label}
-                    </span>
-                    <span className={`font-bold ${urgentDeadline ? "text-red-700" : "text-blue-700"}`}>
-                      {daysLeft <= 0 ? "פג תוקף" : `עוד ${daysLeft} יום${daysLeft === 1 ? "" : "ים"} להגשה`}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span>
-                      {periodUsed} מתוך {MAX_CONSTRAINTS} אילוצים הוגשו בתקופה זו
-                    </span>
+                    <span className="font-semibold">תקופה: {currentPeriod.label}</span>
                     {remaining === 0
                       ? <span className="font-semibold text-red-700">הגעת למגבלה</span>
-                      : <span>{remaining} נותרו</span>
+                      : <span>{periodUsed} מתוך {MAX_CONSTRAINTS} אילוצים · {remaining} נותרו</span>
                     }
                   </div>
-                  {/* Progress bar */}
                   <div className="w-full bg-white/60 rounded-full h-1.5 mt-0.5 overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all ${periodUsed >= MAX_CONSTRAINTS ? "bg-red-500" : urgentDeadline ? "bg-orange-400" : "bg-blue-500"}`}
+                      className={`h-full rounded-full transition-all ${periodUsed >= MAX_CONSTRAINTS ? "bg-red-500" : "bg-blue-500"}`}
                       style={{ width: `${Math.min((periodUsed / MAX_CONSTRAINTS) * 100, 100)}%` }}
                     />
                   </div>
@@ -603,10 +548,6 @@ export default function EmployeeDashboardPage() {
 
               {isPastDay ? (
                 <p className="text-xs text-gray-400">לא ניתן להוסיף אילוץ לתאריך שעבר.</p>
-              ) : deadlinePassed ? (
-                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  פג המועד להגשת אילוצים — המועד האחרון היה {currentPeriod.end.split("-").slice(1).map(Number).join("/")}
-                </p>
               ) : atPeriodLimit ? (
                 <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">הגעת למגבלת {MAX_CONSTRAINTS} אילוצים לתקופה זו.</p>
               ) : (
@@ -689,55 +630,6 @@ export default function EmployeeDashboardPage() {
             {recurResult && (
               <p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
                 ✓ {recurResult}
-              </p>
-            )}
-          </div>
-        </section>
-
-        {/* ── Vacation week ──────────────────────────────────────────────── */}
-        <section className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <h2 className="font-semibold text-gray-800">שבוע חופשה</h2>
-            <p className="text-xs text-gray-400 mt-0.5">הגש אילוץ &quot;כל היום&quot; לכל ימי שבוע נבחר בבת-אחת</p>
-          </div>
-          <div className="px-5 py-4 space-y-3">
-            <div className="flex gap-2">
-              <input
-                type="date"
-                value={vacWeekDate}
-                onChange={e => { setVacWeekDate(e.target.value); setVacResult(null); }}
-                min={today}
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              />
-              <button
-                onClick={handleVacWeekSubmit}
-                disabled={vacSubmitting || !vacWeekDate || deadlinePassed}
-                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shrink-0"
-              >
-                {vacSubmitting ? "שולח..." : "הגש שבוע"}
-              </button>
-            </div>
-            {vacWeekDate && (() => {
-              const [vy, vm, vd] = vacWeekDate.split("-").map(Number);
-              const dt = new Date(vy, vm - 1, vd);
-              const sun = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() - dt.getDay());
-              const sat = new Date(sun.getFullYear(), sun.getMonth(), sun.getDate() + 6);
-              return (
-                <p className="text-xs text-gray-500">
-                  שבוע: {sun.getDate()}/{sun.getMonth()+1} – {sat.getDate()}/{sat.getMonth()+1}
-                </p>
-              );
-            })()}
-            {deadlinePassed && (
-              <p className="text-xs text-red-600">פג המועד להגשת אילוצים לתקופה הנוכחית.</p>
-            )}
-            {vacResult && (
-              <p className={`text-sm rounded-lg px-3 py-2 border ${
-                vacResult.startsWith("נוספו")
-                  ? "text-green-700 bg-green-50 border-green-200"
-                  : "text-red-700 bg-red-50 border-red-200"
-              }`}>
-                {vacResult.startsWith("נוספו") ? "✓ " : ""}{vacResult}
               </p>
             )}
           </div>

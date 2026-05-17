@@ -92,17 +92,6 @@ export async function POST(request: Request) {
 
   const { dateISO, constraintType, note } = await request.json();
 
-  // Enforce submission deadline (10th of current or next month)
-  const now = new Date();
-  const ty = now.getFullYear(), tm = now.getMonth() + 1, td = now.getDate();
-  const todayStr = `${ty}-${String(tm).padStart(2,"0")}-${String(td).padStart(2,"0")}`;
-  const deadlineISO = td >= 20
-    ? `${tm === 12 ? ty + 1 : ty}-${String(tm === 12 ? 1 : tm + 1).padStart(2,"0")}-10`
-    : `${ty}-${String(tm).padStart(2,"0")}-10`;
-  if (todayStr > deadlineISO) {
-    return NextResponse.json({ error: "פג המועד להגשת אילוצים לתקופה הנוכחית" }, { status: 403 });
-  }
-
   const res = await fetch(`${SUPABASE_URL}/rest/v1/employee_constraints`, {
     method: "POST",
     headers: anonHeaders({ Prefer: "return=representation" }),
